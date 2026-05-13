@@ -18,14 +18,56 @@ A customtkinter desktop app that searches PubMed for articles matching your rese
 
 ## LLM configuration
 
-Two-pass pipeline with separate models for each pass:
+Two-pass pipeline. Pass 1 always runs locally; Pass 2 is configurable.
 
-- **Pass 1 (screening):** always runs locally via Ollama (`llama3.2:latest` by default)
-- **Pass 2 (scoring + summarization):** configurable in Settings
-  - *Local:* any Ollama model
-  - *Cloud:* any OpenAI-compatible API endpoint (OpenRouter, LM Studio, etc.)
+### Pass 1 — Screening (local)
 
-No LiteLLM proxy required. Prototype builds use a bring-your-own-key model.
+Filters out clearly irrelevant articles before the cloud model is called. Runs via Ollama.
+
+**Recommended:** `llama3.2:latest` (3B) — tested, 100% recall on relevant papers, fast (~0.3s/article)
+
+Any Ollama model in the 3–8B range should work. Pass 1 only needs to answer YES/MAYBE/NO, so a larger model gives diminishing returns. Avoid very small models (<1B) — they tend to hallucinate labels.
+
+### Pass 2 — Scoring + summarization (configurable)
+
+Scores each article 1–10 and generates a summary. This is where model quality matters.
+
+**Tested configs** — evaluated against 92 papers labeled from an EndNote library in a single research area (neuroscience/pharmacology: sEH inhibitors, neuropathic pain). "Tested" means the full pipeline was run end-to-end on this dataset; results may not generalize to other fields or keyword sets.
+
+| Pass 2 model | Relevant recall @t=4 | Irrelevant pass-through | Time/run |
+|---|---|---|---|
+| `llama3.2:latest` (local) | 97.7% @t=6 | 67% | ~5.4 min |
+| Baidu/Qianfan OCR-Fast (free) | 86.0% | 33% | ~4.4 min |
+| InclusionAI Ring 2.6-1T (free) | 74.4% | 0% | ~6.6 min |
+
+**Production default:** `Baidu/Qianfan OCR-Fast` via [OpenRouter](https://openrouter.ai) (free tier). Best precision/recall tradeoff with zero irrelevant papers above threshold 4.
+
+**Local fallback:** `llama3.2:latest` both passes at threshold 6 — highest recall, no API needed, but ~67% of irrelevant papers pass through.
+
+**Other options (not tested in this pipeline):**
+
+| Model | Where | Cost | Notes |
+|---|---|---|---|
+| `gemma2:9b`, `mistral:7b` | Ollama | Free | Likely comparable to llama3.2 locally |
+| `qwen3.5:9b` | Ollama/LM Studio | Free | Reasoning variant may over-think simple scoring task |
+| `gpt-4o-mini` | OpenAI API | ~$0.15/1M tok | Strong instruction following; paid |
+| `claude-haiku-4` | Anthropic API | ~$0.25/1M tok | Fast, reliable JSON output; paid |
+| `google/gemini-flash-1.5` | OpenRouter | Free tier available | Not tested |
+
+### Caveats
+
+**OpenRouter free tier:** Free models on OpenRouter have rate limits (typically 20 req/min, 200 req/day per model as of 2026). A pipeline run over 50–100 articles will approach or hit the daily limit. If you hit it, the app logs an API error and skips scoring for that article. Options: spread runs across days, use a paid model, or use local fallback.
+
+**NCBI E-utilities (PubMed):** Without a registered API key, the rate limit is 3 requests/second. The app enforces this with a 0.4s inter-call delay and exponential backoff on 429s. Fetching 100+ articles in a single run may still trigger occasional rate limit errors — these are retried automatically. Registering a free NCBI API key raises the limit to 10 req/sec.
+
+**Local models and RAM:** Pass 1 runs concurrently with article processing. On machines with <16GB RAM, running a 7B+ Ollama model alongside the GUI may cause slowdowns. `llama3.2:latest` (3B, ~2GB) is the safest default.
+
+### Recommended setup (free)
+
+1. Install [Ollama](https://ollama.ai) and pull `llama3.2:latest`
+2. Create a free [OpenRouter](https://openrouter.ai) account and get an API key
+3. In Settings: Pass 1 = local, Pass 2 = cloud → enter OpenRouter key, select `baidu/qianfan-ocr-fast:free`
+4. Set threshold to 4
 
 ---
 
