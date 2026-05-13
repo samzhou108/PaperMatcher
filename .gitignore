@@ -1,0 +1,30 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# PyInstaller
+dist/
+build/work/
+*.spec
+
+# macOS
+.DS_Store
+
+# User data — never commit
+config.json
+config.json.bak
+paperpilot.db
+paperpilot.db.bak
+
+# Keys — never commit
+.env
+*.env
+
+# Eval outputs (contain labeled paper data)
+tests/*.csv
+
+# Internal notes
+progress_tracking/
