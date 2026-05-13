@@ -24,7 +24,7 @@ Two-pass pipeline. Pass 1 always runs locally; Pass 2 is configurable.
 
 Filters out clearly irrelevant articles before the cloud model is called. Runs via Ollama.
 
-**Recommended:** `llama3.2:latest` (3B) — tested, 100% recall on relevant papers, fast (~0.3s/article)
+**Recommended:** `llama3.2:latest` (3B) — tested, fast (~0.3s/article). Note: 100% Pass 1 recall was measured on a single labeled test set and should not be taken as a general performance guarantee. See `tests/` and progress logs for details.
 
 Any Ollama model in the 3–8B range should work. Pass 1 only needs to answer YES/MAYBE/NO, so a larger model gives diminishing returns. Avoid very small models (<1B) — they tend to hallucinate labels.
 
@@ -32,17 +32,19 @@ Any Ollama model in the 3–8B range should work. Pass 1 only needs to answer YE
 
 Scores each article 1–10 and generates a summary. This is where model quality matters.
 
-**Tested configs** — evaluated against 92 papers labeled from an EndNote library in a single research area (neuroscience/pharmacology: sEH inhibitors, neuropathic pain). "Tested" means the full pipeline was run end-to-end on this dataset; results may not generalize to other fields or keyword sets.
+**Tested configs** — evaluated against 92 papers labeled from an EndNote library (single research area, one keyword set). "Tested" means the full pipeline was run end-to-end on this dataset with Pass 1 = `llama3.2:latest`; results may not generalize to other fields or keyword sets. See `tests/` and progress logs for details.
 
-| Pass 2 model | Relevant recall @t=4 | Irrelevant pass-through | Time/run |
-|---|---|---|---|
-| `llama3.2:latest` (local) | 97.7% @t=6 | 67% | ~5.4 min |
-| Baidu/Qianfan OCR-Fast (free) | 86.0% | 33% | ~4.4 min |
-| InclusionAI Ring 2.6-1T (free) | 74.4% | 0% | ~6.6 min |
+| Pass 2 model | OpenRouter ID | Relevant recall | Irrelevant pass-through | Time/run |
+|---|---|---|---|---|
+| `llama3.2:latest` (local) | — | 97.7% @t=6 | 67% | ~5.4 min |
+| Baidu/Qianfan OCR-Fast | `baidu/qianfan-ocr-fast:free` | 86.0% @t=4 | 33% | ~4.4 min |
+| InclusionAI Ring 2.6-1T | `inclusionai/ring-2.6-1t:free` | 74.4% @t=4 | 0% | ~6.6 min |
 
-**Production default:** `Baidu/Qianfan OCR-Fast` via [OpenRouter](https://openrouter.ai) (free tier). Best precision/recall tradeoff with zero irrelevant papers above threshold 4.
+Note: `llama3.2:latest` as Pass 2 has high recall but poor score discrimination — most articles cluster in a narrow range, making threshold tuning less reliable than with cloud models.
 
-**Local fallback:** `llama3.2:latest` both passes at threshold 6 — highest recall, no API needed, but ~67% of irrelevant papers pass through.
+**Production default:** `baidu/qianfan-ocr-fast:free` via [OpenRouter](https://openrouter.ai). Best precision/recall tradeoff with zero irrelevant papers above threshold 4.
+
+**Local fallback:** `llama3.2:latest` both passes at threshold 6 — no API needed, but ~67% of irrelevant papers pass through and score discrimination is limited.
 
 **Other options (not tested in this pipeline):**
 
@@ -52,22 +54,49 @@ Scores each article 1–10 and generates a summary. This is where model quality 
 | `qwen3.5:9b` | Ollama/LM Studio | Free | Reasoning variant may over-think simple scoring task |
 | `gpt-4o-mini` | OpenAI API | ~$0.15/1M tok | Strong instruction following; paid |
 | `claude-haiku-4` | Anthropic API | ~$0.25/1M tok | Fast, reliable JSON output; paid |
-| `google/gemini-flash-1.5` | OpenRouter | Free tier available | Not tested |
 
 ### Caveats
 
-**OpenRouter free tier:** Free models on OpenRouter have rate limits (typically 20 req/min, 200 req/day per model as of 2026). A pipeline run over 50–100 articles will approach or hit the daily limit. If you hit it, the app logs an API error and skips scoring for that article. Options: spread runs across days, use a paid model, or use local fallback.
+**OpenRouter free tier:** Free-tier models are rate-limited to 50 requests/day, which is not sufficient for a typical pipeline run (50–100 articles = 50–100 scoring calls plus summarization). To use cloud Pass 2 reliably, you need to add at least $10 USD credit to your OpenRouter account, which raises the limit to 1000 requests/day. If you don't want to pay, use `llama3.2:latest` for both passes (local, no rate limit).
 
-**NCBI E-utilities (PubMed):** Without a registered API key, the rate limit is 3 requests/second. The app enforces this with a 0.4s inter-call delay and exponential backoff on 429s. Fetching 100+ articles in a single run may still trigger occasional rate limit errors — these are retried automatically. Registering a free NCBI API key raises the limit to 10 req/sec.
+**NCBI E-utilities (PubMed):** Without a registered API key, the rate limit is 3 requests/second. The app enforces this with a 0.4s inter-call delay and exponential backoff on 429 errors. Fetching 100+ articles may still trigger occasional rate limit errors — these are retried automatically. A free NCBI API key raises the limit to 10 req/sec.
 
-**Local models and RAM:** Pass 1 runs concurrently with article processing. On machines with <16GB RAM, running a 7B+ Ollama model alongside the GUI may cause slowdowns. `llama3.2:latest` (3B, ~2GB) is the safest default.
+**Local models and RAM:** `llama3.2:latest` (3B, ~2GB) is the safest default for Pass 1. On machines with <16GB RAM, running a 7B+ Ollama model alongside the GUI may cause slowdowns.
 
-### Recommended setup (free)
+### Recommended setup
 
+**With OpenRouter ($10 credit):**
 1. Install [Ollama](https://ollama.ai) and pull `llama3.2:latest`
-2. Create a free [OpenRouter](https://openrouter.ai) account and get an API key
-3. In Settings: Pass 1 = local, Pass 2 = cloud → enter OpenRouter key, select `baidu/qianfan-ocr-fast:free`
-4. Set threshold to 4
+2. Create an [OpenRouter](https://openrouter.ai) account, add $10 credit, get an API key
+3. In Settings: Pass 1 = local, Pass 2 = cloud → enter OpenRouter key, model `baidu/qianfan-ocr-fast:free`, threshold 4
+
+**Fully local (free, no API):**
+
+1. Install Ollama:
+```bash
+brew install ollama
+```
+Or download the macOS app from [ollama.ai](https://ollama.ai) if you prefer a GUI installer.
+
+2. Start the Ollama server (runs in background):
+```bash
+ollama serve
+```
+
+3. Pull the model:
+```bash
+ollama pull llama3.2:latest
+```
+
+4. Verify it's available:
+```bash
+ollama list
+```
+You should see `llama3.2:latest` in the output.
+
+5. In PaperPilot Settings: Pass 1 = local, Pass 2 = local → model `llama3.2:latest`, threshold 6
+
+> Note: `ollama serve` needs to be running whenever you use the app. You can add it to your login items or just run it in a terminal tab before launching PaperPilot.
 
 ---
 
