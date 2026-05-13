@@ -32,42 +32,44 @@ Any Ollama model in the 3–8B range should work. Pass 1 only needs to answer YE
 
 Scores each article 1–10 and generates a summary. This is where model quality matters.
 
-**Tested configs** — evaluated against 92 papers labeled from an EndNote library (single research area, one keyword set). "Tested" means the full pipeline was run end-to-end on this dataset with Pass 1 = `llama3.2:latest`; results may not generalize to other fields or keyword sets. See `tests/` and progress logs for details.
+The two tested cloud models (`baidu/qianfan-ocr-fast:free` and `inclusionai/ring-2.6-1t:free`) were selected because they are free on OpenRouter, do not train on prompts, and work reliably without the restrictive daily limits that affect many other free models. See `tests/EVAL_README.md` for full evaluation methodology and per-paper results.
 
-| Pass 2 model | OpenRouter ID | Relevant recall | Irrelevant pass-through | Time/run |
-|---|---|---|---|---|
-| `llama3.2:latest` (local) | — | 97.7% @t=6 | 67% | ~5.4 min |
-| Baidu/Qianfan OCR-Fast | `baidu/qianfan-ocr-fast:free` | 86.0% @t=4 | 33% | ~4.4 min |
-| InclusionAI Ring 2.6-1T | `inclusionai/ring-2.6-1t:free` | 74.4% @t=4 | 0% | ~6.6 min |
+@t = relevance score threshold (articles below this score are discarded).
+
+| Pass 2 model | OpenRouter ID | Relevant recall | Irrelevant pass-through |
+|---|---|---|---|
+| `llama3.2:latest` (local) | — | 97.7% @t=6 | 67% |
+| Baidu/Qianfan OCR-Fast | `baidu/qianfan-ocr-fast:free` | 86.0% @t=4 | 33% |
+| InclusionAI Ring 2.6-1T | `inclusionai/ring-2.6-1t:free` | 74.4% @t=4 | 0% |
 
 Note: `llama3.2:latest` as Pass 2 has high recall but poor score discrimination — most articles cluster in a narrow range, making threshold tuning less reliable than with cloud models.
 
-**Production default:** `baidu/qianfan-ocr-fast:free` via [OpenRouter](https://openrouter.ai). Best precision/recall tradeoff with zero irrelevant papers above threshold 4.
+**Production default:** `baidu/qianfan-ocr-fast:free` — best precision/recall tradeoff, zero irrelevant papers above threshold 4.
 
-**Local fallback:** `llama3.2:latest` both passes at threshold 6 — no API needed, but ~67% of irrelevant papers pass through and score discrimination is limited.
+**Local fallback:** `llama3.2:latest` both passes at threshold 6 — no API needed, but ~67% of irrelevant papers pass through.
 
 **Other options (not tested in this pipeline):**
 
-| Model | Where | Cost | Notes |
-|---|---|---|---|
-| `gemma2:9b`, `mistral:7b` | Ollama | Free | Likely comparable to llama3.2 locally |
-| `qwen3.5:9b` | Ollama/LM Studio | Free | Reasoning variant may over-think simple scoring task |
-| `gpt-4o-mini` | OpenAI API | ~$0.15/1M tok | Strong instruction following; paid |
-| `claude-haiku-4` | Anthropic API | ~$0.25/1M tok | Fast, reliable JSON output; paid |
+| Model | Where | Cost |
+|---|---|---|
+| `gemma2:9b`, `mistral:7b` | Ollama | Free |
+| `qwen3.5:9b` | Ollama/LM Studio | Free |
+| `gpt-4o-mini` | OpenAI API | ~$0.15/1M tok |
+| `claude-haiku-4` | Anthropic API | ~$0.25/1M tok |
 
 ### Caveats
 
-**OpenRouter free tier:** Free-tier models are rate-limited to 50 requests/day, which is not sufficient for a typical pipeline run (50–100 articles = 50–100 scoring calls plus summarization). To use cloud Pass 2 reliably, you need to add at least $10 USD credit to your OpenRouter account, which raises the limit to 1000 requests/day. If you don't want to pay, use `llama3.2:latest` for both passes (local, no rate limit).
+**OpenRouter free tier:** Rate-limited to 50 requests/day — not sufficient for a typical pipeline run. To use cloud Pass 2 reliably, add at least $10 USD credit to your OpenRouter account (raises limit to 1000 requests/day). Otherwise use `llama3.2:latest` locally for both passes.
 
-**NCBI E-utilities (PubMed):** Without a registered API key, the rate limit is 3 requests/second. The app enforces this with a 0.4s inter-call delay and exponential backoff on 429 errors. Fetching 100+ articles may still trigger occasional rate limit errors — these are retried automatically. A free NCBI API key raises the limit to 10 req/sec.
+**NCBI E-utilities (PubMed):** Without a registered API key, the rate limit is 3 requests/second. The app enforces this automatically with backoff on errors. A free NCBI API key raises the limit to 10 req/sec.
 
-**Local models and RAM:** `llama3.2:latest` (3B, ~2GB) is the safest default for Pass 1. On machines with <16GB RAM, running a 7B+ Ollama model alongside the GUI may cause slowdowns.
+**Local models and RAM:** On machines with <16GB RAM, running a 7B+ Ollama model alongside the GUI may cause slowdowns. `llama3.2:latest` (3B, ~2GB) is the safest default.
 
 ### Recommended setup
 
-**With OpenRouter ($10 credit):**
+**With OpenRouter ($10 USD credit):**
 1. Install [Ollama](https://ollama.ai) and pull `llama3.2:latest`
-2. Create an [OpenRouter](https://openrouter.ai) account, add $10 credit, get an API key
+2. Create an [OpenRouter](https://openrouter.ai) account, add $10 USD credit, get an API key
 3. In Settings: Pass 1 = local, Pass 2 = cloud → enter OpenRouter key, model `baidu/qianfan-ocr-fast:free`, threshold 4
 
 **Fully local (free, no API):**
@@ -139,8 +141,10 @@ PubMedPaperPilot/
 ## How to run
 
 ```bash
-cd ~/Documents/Claude/Projects/Journal_Tracker/PubMedPaperPilot
+cd /path/to/PubMedPaperPilot
+python3 -m venv venv          # first time only
 source venv/bin/activate
+pip install -r requirements.txt  # first time only
 python3 main.py
 ```
 
