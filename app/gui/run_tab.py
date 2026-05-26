@@ -453,7 +453,7 @@ class RunTab:
             pub_type_row, text="Exclude selected types",
             variable=self._pub_type_exclude,
             font=ctk.CTkFont(size=10),
-            command=self._update_query_preview
+            command=self._update_query_preview,
         )
         exclude_toggle.pack(side="left", padx=(0, 8))
 
@@ -1020,6 +1020,9 @@ class RunTab:
             if self._query_user_edited else None
         )
         self._pipeline_pub_types = self._pub_type_query_terms()
+        self._pipeline_pub_type_exclude = self._pub_type_exclude.get()
+
+        # Re-capture exclude state at pipeline start in case it changed after query preview
         self._pipeline_pub_type_exclude = self._pub_type_exclude.get()
 
         # Create shared HTTP client on the main thread to avoid
