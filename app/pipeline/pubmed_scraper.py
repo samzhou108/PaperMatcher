@@ -3,28 +3,97 @@
 import logging
 import time
 import xml.etree.ElementTree as ET
+from pathlib import Path
 from typing import List, Dict, Optional
 import httpx
 
 BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(levelname)s: %(message)s')
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 
 class PubMedScraper:
     """Scrape PubMed database for articles matching search criteria."""
 
-    def __init__(self, max_results: int = 50):
+    # --- Rate limits ---
+    # Authenticated: 10 requests/sec (api_key present)
+    # Unauthenticated: 3 requests/sec
+    RATE_LIMIT_AUTH = 0.1
+    RATE_LIMIT_ANON = 0.4
+
+    def __init__(self, max_results: int = 500, session: Optional[httpx.Client] = None,
+                 api_key: Optional[str] = None, batch_size: int = 200):
         self.max_results = max_results
-        self.last_request_time = 0
-        self.min_interval = 0.4  # Max ~3 requests per second (NCBI rate limit)
-        self._session = httpx.Client(timeout=30.0)
+        self.min_interval = self.RATE_LIMIT_AUTH if api_key else self.RATE_LIMIT_ANON
+        self.batch_size = batch_size
+        self._api_key = api_key
+        self.last_request_time = 0.0
+
+        self._owned_session = None
+        if session is not None:
+            self._session = session
+        else:
+            self._owned_session = httpx.Client(timeout=30.0)
+            self._session = self._owned_session
 
     def close(self):
-        """Release the HTTP session."""
+        """Release the HTTP session (only if we own it)."""
         try:
-            self._session.close()
+            if self._owned_session is not None:
+                self._owned_session.close()
         except Exception:
             pass
+
+    def _get_mesh_descriptor(self, keyword: str) -> Optional[str]:
+        """Look up the preferred MeSH descriptor for a keyword via NCBI E-utilities.
+
+        Uses esearch on db=mesh to find a matching descriptor UID, then esummary
+        to get the canonical descriptor name. Returns None if no match or on error.
+        """
+        try:
+            # Step 1: esearch in the MeSH database
+            params: dict = {
+                "db": "mesh",
+                "term": keyword.strip(),
+                "retmax": 1,
+                "retmode": "json",
+            }
+            if self._api_key:
+                params["api_key"] = self._api_key
+            self._rate_limit()
+            resp = self._session.get(f"{BASE_URL}/esearch.fcgi", params=params, timeout=10)
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+            id_list = data.get("esearchresult", {}).get("idlist", [])
+            if not id_list:
+                return None
+
+            mesh_uid = id_list[0]
+
+            # Step 2: esummary to retrieve the preferred descriptor name
+            sum_params: dict = {
+                "db": "mesh",
+                "id": mesh_uid,
+                "retmode": "json",
+            }
+            if self._api_key:
+                sum_params["api_key"] = self._api_key
+            self._rate_limit()
+            resp2 = self._session.get(f"{BASE_URL}/esummary.fcgi", params=sum_params, timeout=10)
+            if resp2.status_code != 200:
+                return None
+            summary = resp2.json()
+            result = summary.get("result", {})
+            uids = result.get("uids", [])
+            if not uids:
+                return None
+            descriptor = result.get(str(uids[0]), {}).get("ds_name", "")
+            return descriptor if descriptor else None
+        except Exception:
+            return None
 
     def _rate_limit(self):
         """Respect PubMed rate limits."""
@@ -33,7 +102,7 @@ class PubMedScraper:
             time.sleep(self.min_interval - elapsed)
         self.last_request_time = time.time()
 
-    def _get_with_retry(self, url: str, params: dict, retries: int = 3,
+    def _get_with_retry(self, url: str, params: dict, retries: int = 5,
                         base_delay: float = 2.0) -> httpx.Response:
         """GET with exponential backoff on 429/500 errors."""
         if self._session.is_closed:
@@ -64,7 +133,11 @@ class PubMedScraper:
     def search_by_keywords(self, keywords: List[str], since_days: int = 7,
                            must_include: Optional[List[str]] = None,
                            include_to_expand: Optional[List[str]] = None,
-                           do_not_include: Optional[List[str]] = None) -> List[Dict]:
+                           do_not_include: Optional[List[str]] = None,
+                           pub_types: Optional[List[str]] = None,
+                           pub_type_exclude: bool = False,
+                           use_mesh: bool = True,
+                           exclude_pmids: Optional[set] = None) -> List[Dict]:
         """Search PubMed by keywords and return article dicts.
 
         Args:
@@ -73,29 +146,46 @@ class PubMedScraper:
             must_include: Terms that MUST appear in results (AND'd with query).
             include_to_expand: Additional terms to OR with the main query.
             do_not_include: Terms that must NOT appear in results.
+            use_mesh: If True, expand keywords to MeSH descriptors where available.
+            pub_types: Publication type filters (e.g. ["Review[Publication Type]"]).
+            pub_type_exclude: If True, exclude pub_types (NOT); if False, include (AND).
 
         Returns:
             List of article dicts with title, authors, journal, date, pmid, doi, abstract
         """
         self._rate_limit()
 
-        # Build search query
+        # Build search query.
+        # Profile keywords and expand terms: no field tag = implicit [All Fields].
+        #   This catches MeSH-indexed terms, title, abstract, author, journal, etc.
+        # Must Include: [Title/Abstract] only — these are specific project filters.
+        # Do Not Include: no field tag — exclude regardless of where the term appears.
+        # MeSH form (when enabled): ("Descriptor"[MeSH Terms] OR "keyword")
         query_parts = []
         for kw in keywords:
-            if kw.strip():
-                query_parts.append(f'"{kw.strip()}"[Title/Abstract]')
+            if not kw.strip():
+                continue
+            if use_mesh:
+                mesh_term = self._get_mesh_descriptor(kw)
+                if mesh_term and mesh_term.lower() != kw.strip().lower():
+                    logger.info(f"MeSH expansion: '{kw}' → '{mesh_term}'")
+                    query_parts.append(f'("{mesh_term}"[MeSH Terms] OR "{kw.strip()}")')
+                else:
+                    query_parts.append(f'"{kw.strip()}"')
+            else:
+                query_parts.append(f'"{kw.strip()}"')
 
-        # Expand with additional terms
+        # Include-to-expand: OR'd into the main keyword block, all fields
         for term in (include_to_expand or []):
             if term.strip():
-                query_parts.append(f'"{term.strip()}"[Title/Abstract]')
+                query_parts.append(f'"{term.strip()}"')
 
         if not query_parts:
             return []
 
         main_query = "(" + " OR ".join(query_parts) + ")"
 
-        # Must-include: AND each required term
+        # Must-include: AND each term, restricted to Title/Abstract
         must_parts = []
         for term in (must_include or []):
             if term.strip():
@@ -103,29 +193,44 @@ class PubMedScraper:
         if must_parts:
             main_query = f"{main_query} AND {' AND '.join(must_parts)}"
 
-        # Do-not-include: AND NOT each excluded term
+        # Do-not-include: NOT, all fields
         exclude_parts = []
         for term in (do_not_include or []):
             if term.strip():
-                exclude_parts.append(f'"{term.strip()}"[Title/Abstract]')
+                exclude_parts.append(f'"{term.strip()}"')
         if exclude_parts:
             main_query = f"{main_query} NOT ({' OR '.join(exclude_parts)})"
+
+        # Publication type filters
+        if pub_types:
+            pub_clause = '(' + ' OR '.join(pub_types) + ')'
+            if pub_type_exclude:
+                main_query = f"{main_query} NOT {pub_clause}"
+            else:
+                main_query = f"{main_query} AND {pub_clause}"
 
         # Add date filter
         from datetime import datetime, timedelta
         since_date = (datetime.now() - timedelta(days=since_days)).strftime("%Y/%m/%d")
         full_query = f"{main_query} AND {since_date}:3000[Date - Publication]"
 
-        print(f"[PubMedScraper] Searching: {full_query[:200]}...")
+        logger.info(f"PubMed search query: {full_query}")
 
-        # Step 1: esearch - get PMIDs
+        # Step 1: esearch — fetch a larger pool so already-seen articles
+        # don't permanently block newer ones from being processed.
+        # We request up to 10× max_results (capped at 500 without API key,
+        # 1000 with one) then filter out already-seen PMIDs before efetch.
+        pool_size = min(500 if not self._api_key else 1000,
+                        max(self.max_results * 10, 200))
         search_params = {
             "db": "pubmed",
             "term": full_query,
-            "retmax": self.max_results,
+            "retmax": pool_size,
             "retmode": "json",
             "sort": "relevance",
         }
+        if self._api_key:
+            search_params["api_key"] = self._api_key
 
         try:
             resp = self._get_with_retry(f"{BASE_URL}/esearch.fcgi", search_params)
@@ -136,19 +241,129 @@ class PubMedScraper:
 
         id_list = data.get("esearchresult", {}).get("idlist", [])
         if not id_list:
-            print(f"[PubMedScraper] No results found")
+            logger.info("PubMed search returned no results")
             return []
 
-        print(f"[PubMedScraper] Found {len(id_list)} articles")
+        total_found = len(id_list)
+        # Filter out already-seen PMIDs before efetch
+        if exclude_pmids:
+            id_list = [p for p in id_list if p not in exclude_pmids]
+            skipped = total_found - len(id_list)
+            if skipped:
+                logger.info(f"Skipped {skipped} already-seen articles; "
+                            f"{len(id_list)} new articles available")
+        # Cap at max_results for efetch
+        id_list = id_list[:self.max_results]
+        logger.info(f"PubMed search found {total_found} articles total, "
+                    f"fetching {len(id_list)} new ones")
 
         # Step 2: fetch - get full details
         articles = []
-        # Fetch in batches of 20
-        for i in range(0, len(id_list), 20):
-            batch = id_list[i:i + 20]
+        total = len(id_list)
+        for i in range(0, total, self.batch_size):
+            batch = id_list[i:i + self.batch_size]
             articles.extend(self._fetch_batch(batch))
+            self._rate_limit()
 
         return articles
+
+    @staticmethod
+    def _split_top_level_and(query: str) -> List[str]:
+        """Split a PubMed query on AND only at the top level (not inside parentheses).
+
+        Returns a list of clauses. If there is only one clause, returns [query].
+        """
+        parts: List[str] = []
+        depth = 0
+        current: List[str] = []
+        i = 0
+        while i < len(query):
+            ch = query[i]
+            if ch == '(':
+                depth += 1
+                current.append(ch)
+            elif ch == ')':
+                depth -= 1
+                current.append(ch)
+            elif depth == 0 and query[i:i+5] == ' AND ':
+                parts.append(''.join(current).strip())
+                current = []
+                i += 4  # skip ' AND' (loop will advance past the trailing space)
+            else:
+                current.append(ch)
+            i += 1
+        tail = ''.join(current).strip()
+        if tail:
+            parts.append(tail)
+        return parts if len(parts) > 1 else [query]
+
+    def _run_esearch(self, full_query: str) -> List[str]:
+        """Execute an esearch and return a list of PMIDs, or [] on failure/no results."""
+        search_params = {
+            "db": "pubmed",
+            "term": full_query,
+            "retmax": self.max_results,
+            "retmode": "json",
+            "sort": "relevance",
+        }
+        if self._api_key:
+            search_params["api_key"] = self._api_key
+        try:
+            resp = self._get_with_retry(f"{BASE_URL}/esearch.fcgi", search_params)
+            return resp.json().get("esearchresult", {}).get("idlist", [])
+        except Exception as e:
+            logger.error(f"PubMed esearch error: {e}")
+            return []
+
+    def search_with_query(self, raw_query: str, since_days: int = 7,
+                          exclude_pmids: Optional[set] = None) -> List[Dict]:
+        """Search PubMed using a pre-built query string with auto-broadening fallback.
+
+        If the query returns 0 results, AND clauses are stripped one by one from
+        the right until results are found or only the core OR block remains.
+        """
+        from datetime import datetime, timedelta
+        since_date = (datetime.now() - timedelta(days=since_days)).strftime("%Y/%m/%d")
+        date_filter = f"{since_date}:3000[Date - Publication]"
+
+        clauses = self._split_top_level_and(raw_query)
+
+        for attempt in range(len(clauses), 0, -1):
+            candidate = " AND ".join(clauses[:attempt])
+            full_query = f"({candidate}) AND {date_filter}"
+            logger.info("PubMed raw query search: %s", full_query)
+
+            id_list = self._run_esearch(full_query)
+            if id_list:
+                if attempt < len(clauses):
+                    logger.info(
+                        "Auto-broadened: removed %d AND clause(s) to find results",
+                        len(clauses) - attempt,
+                    )
+                total_found = len(id_list)
+                if exclude_pmids:
+                    id_list = [p for p in id_list if p not in exclude_pmids]
+                    skipped = total_found - len(id_list)
+                    if skipped:
+                        logger.info(f"Skipped {skipped} already-seen articles; "
+                                    f"{len(id_list)} new articles available")
+                id_list = id_list[:self.max_results]
+                logger.info("PubMed search found %d articles total, fetching %d new ones",
+                            total_found, len(id_list))
+                articles = []
+                for i in range(0, len(id_list), self.batch_size):
+                    articles.extend(self._fetch_batch(id_list[i:i + self.batch_size]))
+                    self._rate_limit()
+                return articles
+            else:
+                if attempt > 1:
+                    logger.info(
+                        "No results with %d AND clause(s), trying with %d...",
+                        attempt, attempt - 1,
+                    )
+
+        logger.info("PubMed search returned no results after auto-broadening")
+        return []
 
     def search_by_journal(self, journal_name: str, since_days: int = 7) -> List[Dict]:
         """Search PubMed by journal name.
@@ -165,7 +380,7 @@ class PubMedScraper:
 
         query = f"{journal_name}[Journal] AND {since_date}:3000[Date - Publication]"
 
-        print(f"[PubMedScraper] Searching journal: {query}")
+        logger.info(f"PubMed journal search: {query}")
 
         search_params = {
             "db": "pubmed",
@@ -187,8 +402,8 @@ class PubMedScraper:
             return []
 
         articles = []
-        for i in range(0, len(id_list), 20):
-            batch = id_list[i:i + 20]
+        for i in range(0, len(id_list), self.batch_size):
+            batch = id_list[i:i + self.batch_size]
             articles.extend(self._fetch_batch(batch))
 
         return articles
@@ -246,12 +461,24 @@ class PubMedScraper:
 
         return articles
 
+    @staticmethod
+    def _elem_text(elem) -> str:
+        """Return all text content of an XML element, including child element text.
+
+        ElementTree's .text only returns text before the first child element.
+        PubMed titles and abstracts sometimes use inline markup (<i>, <b>, <sup>, etc.),
+        so itertext() is needed to get the full string.
+        """
+        if elem is None:
+            return ""
+        return "".join(elem.itertext()).strip()
+
     def _parse_article(self, article) -> Optional[Dict]:
         """Parse a single PubMed article element."""
         try:
-            # Title
+            # Title — use itertext() to handle inline markup in the XML
             title_elem = article.find(".//ArticleTitle")
-            title = title_elem.text if title_elem is not None and title_elem.text else ""
+            title = self._elem_text(title_elem)
             if not title:
                 return None
 
@@ -271,18 +498,13 @@ class PubMedScraper:
                     if name_parts:
                         authors.append(" ".join(name_parts))
 
-            # Abstract
+            # Abstract — use itertext() per section to handle inline markup
             abstract_texts = []
             abstract_elem = article.find(".//Abstract")
             if abstract_elem is not None:
                 for abst_text in abstract_elem.findall(".//AbstractText"):
                     label = abst_text.get("Label", "")
-                    text = "" if abst_text.text is None else abst_text.text
-                    for child in abst_text:
-                        if child.text:
-                            text += " " + child.text
-                        if child.tail:
-                            text += child.tail
+                    text = self._elem_text(abst_text)
                     if label:
                         abstract_texts.append(f"{label}: {text}")
                     else:

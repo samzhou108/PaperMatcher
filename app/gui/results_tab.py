@@ -1,12 +1,15 @@
 """Results tab — shows all saved articles from the local database."""
 
+import csv
 import subprocess
 import sys
 from datetime import datetime
+from tkinter import filedialog
 
 import customtkinter as ctk
 
 from app.gui.widgets.scrollable_frame import ScrollableFrame
+from app.gui.widgets.pill_frame import PillFrame
 from app.utils.db import ArticleDatabase
 
 
@@ -24,10 +27,17 @@ def _open_url(url: str):
 class ResultsTab:
     """Displays saved articles from SQLite, newest first."""
 
+    PAGE_SIZE = 20
+
     def __init__(self, master, db: ArticleDatabase):
         self.master = master
         self.db = db
         self._last_count = -1  # tracks whether data has changed
+        self._page = 0
+        self._articles: list = []
+        self._expanded: set = set()  # track expanded article IDs
+        self._article_map: dict = {}  # id → article dict, avoids DB round-trips on expand
+        self._detail_frames: dict = {}  # id → detail CTkFrame widget reference
         self._build_ui()
         # Do NOT refresh here — let AppWindow._on_tab_change handle it lazily
 
@@ -55,6 +65,17 @@ class ResultsTab:
             command=self.refresh,
         ).pack(side="right")
 
+        ctk.CTkButton(
+            bar,
+            text="Export CSV",
+            width=90,
+            height=28,
+            fg_color=("gray75", "gray30"),
+            hover_color=("gray65", "gray40"),
+            text_color=("black", "white"),
+            command=self._export_csv,
+        ).pack(side="right", padx=(4, 0))
+
         # Clear All button
         ctk.CTkButton(
             bar,
@@ -71,19 +92,57 @@ class ResultsTab:
         self.scroll = ScrollableFrame(self.master)
         self.scroll.pack(fill="both", expand=True)
 
-    def refresh(self, force=False):
-        """Reload articles from DB and redraw. Skips if nothing changed unless force=True."""
-        articles = self.db.get_all_processed(limit=200)
-        if not force and len(articles) == self._last_count:
-            return  # nothing changed, skip expensive rebuild
-        self._last_count = len(articles)
+        # Pagination nav bar (hidden until there are multiple pages)
+        self._nav_bar = ctk.CTkFrame(self.master, fg_color="transparent")
+        self._nav_bar.pack(fill="x", pady=(4, 0))
 
+        self._prev_btn = ctk.CTkButton(
+            self._nav_bar, text="← Prev", width=80, height=28,
+            command=self._prev_page,
+        )
+        self._prev_btn.pack(side="left")
+
+        self._page_label = ctk.CTkLabel(
+            self._nav_bar, text="", font=ctk.CTkFont(size=12), width=140
+        )
+        self._page_label.pack(side="left", padx=12)
+
+        self._next_btn = ctk.CTkButton(
+            self._nav_bar, text="Next →", width=80, height=28,
+            command=self._next_page,
+        )
+        self._next_btn.pack(side="left")
+
+    def refresh(self, force=False):
+        """Reload articles from DB and redraw current page.
+
+        Skips the DB fetch (but still redraws) if nothing changed, unless force=True.
+        """
+        articles = self.db.get_all_processed(limit=5000)
+        if not force and len(articles) == self._last_count:
+            return
+        self._last_count = len(articles)
+        self._articles = articles
+        # Reset to page 0 only on a full reload, not on page navigation
+        if force:
+            self._page = 0
+        self._render_page()
+
+    def _render_page(self):
+        """Render only the articles for the current page."""
         for w in self.scroll.winfo_children():
             w.destroy()
+        self._detail_frames.clear()
 
-        self.count_label.configure(text=f"{len(articles)} article{'s' if len(articles) != 1 else ''}")
+        total = len(self._articles)
+        n_pages = max(1, (total + self.PAGE_SIZE - 1) // self.PAGE_SIZE)
+        self._page = max(0, min(self._page, n_pages - 1))
 
-        if not articles:
+        self.count_label.configure(
+            text=f"{total} article{'s' if total != 1 else ''}"
+        )
+
+        if not self._articles:
             ctk.CTkLabel(
                 self.scroll,
                 text="No articles saved yet. Run the pipeline to find relevant papers.",
@@ -91,10 +150,36 @@ class ResultsTab:
                 text_color="gray",
                 wraplength=600,
             ).pack(pady=40)
+            self._nav_bar.pack_forget()
             return
 
-        for article in articles:
+        start = self._page * self.PAGE_SIZE
+        end = min(start + self.PAGE_SIZE, total)
+        self._article_map = {a.get("id"): a for a in self._articles}
+        for article in self._articles[start:end]:
             self._add_card(article)
+
+        # Re-bind scroll events so newly added cards respond to trackpad scrolling
+        self.scroll.refresh_scroll_bindings()
+
+        # Update nav bar
+        if n_pages > 1:
+            self._nav_bar.pack(fill="x", pady=(4, 0))
+            self._page_label.configure(
+                text=f"Page {self._page + 1} / {n_pages}  ({start + 1}–{end})"
+            )
+            self._prev_btn.configure(state="normal" if self._page > 0 else "disabled")
+            self._next_btn.configure(state="normal" if self._page < n_pages - 1 else "disabled")
+        else:
+            self._nav_bar.pack_forget()
+
+    def _prev_page(self):
+        self._page -= 1
+        self._render_page()
+
+    def _next_page(self):
+        self._page += 1
+        self._render_page()
 
     def _confirm_clear_all(self):
         """Show a confirmation dialog before clearing all articles."""
@@ -118,7 +203,9 @@ class ResultsTab:
 
         def _do_clear():
             self.db.clear_all()
-            self._last_count = -1  # force next refresh to rebuild
+            self._last_count = -1
+            self._articles = []
+            self._page = 0
             self.refresh(force=True)
             dialog.destroy()
 
@@ -135,7 +222,8 @@ class ResultsTab:
             return
         try:
             self.db.delete_article(article_id)
-            self.refresh()
+            self._last_count = -1  # force DB re-fetch on next refresh
+            self.refresh(force=True)
         except Exception as e:
             print(f"Error deleting article {article_id}: {e}")
 
@@ -178,169 +266,166 @@ class ResultsTab:
                 hover_color=("#D32F2F", "#B71C1C"),
             )
 
-    def _add_card(self, article: dict):
-        """Add a single article card to the scroll frame."""
-        card = ctk.CTkFrame(self.scroll, corner_radius=8)
-        card.pack(fill="x", pady=(0, 8), padx=2)
+    def _toggle_expand(self, article_id: int, card, indicator_label):
+        """Toggle expanded state. card is the outer CTkFrame so detail drops below the row."""
+        if article_id in self._expanded:
+            self._expanded.remove(article_id)
+            indicator_label.configure(text="▶")
+            frame = self._detail_frames.pop(article_id, None)
+            if frame:
+                frame.destroy()
+        else:
+            self._expanded.add(article_id)
+            indicator_label.configure(text="▼")
+            self._build_detail_frame(article_id, card)
 
-        inner = ctk.CTkFrame(card, fg_color="transparent")
-        inner.pack(fill="x", padx=14, pady=10)
+    def _build_detail_frame(self, article_id: int, card):
+        """Build and pack detail frame inside card (vertical), so it appears below the row."""
+        # Destroy any stale frame first (safety)
+        old = self._detail_frames.pop(article_id, None)
+        if old:
+            old.destroy()
 
-        # Title row
-        title_row = ctk.CTkFrame(inner, fg_color="transparent")
-        title_row.pack(fill="x")
+        article = self._article_map.get(article_id)
+        if not article:
+            return
 
-        score = article.get("relevance_score") or 0
-        score_color = "#4CAF50" if score >= 7 else "#FF9800" if score >= 4 else "gray"
-        ctk.CTkLabel(
-            title_row,
-            text=f"{score}/10",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color=score_color,
-            width=40,
-        ).pack(side="left", padx=(0, 8))
-
-        # Feedback badge
-        fb = article.get("feedback", "")
-        if fb:
-            fb_text = "Relevant" if fb == "relevant" else "Not relevant"
-            fb_color = "#4CAF50" if fb == "relevant" else "#F44336"
-            ctk.CTkLabel(
-                title_row,
-                text=fb_text,
-                font=ctk.CTkFont(size=10),
-                text_color=fb_color,
-            ).pack(side="left", padx=(4, 0))
-
-        title = article.get("title") or "Untitled"
-        ctk.CTkLabel(
-            title_row,
-            text=title,
-            font=ctk.CTkFont(size=13, weight="bold"),
-            wraplength=500,
-            justify="left",
-            anchor="w",
-        ).pack(side="left", fill="x", expand=True)
-
-        # Metadata row
-        meta_parts = []
-        if article.get("journal"):
-            meta_parts.append(article["journal"])
-        if article.get("authors"):
-            authors = article["authors"]
-            # Truncate long author lists
-            if len(authors) > 60:
-                authors = authors[:57] + "..."
-            meta_parts.append(authors)
-        if article.get("processed_at"):
-            try:
-                dt = datetime.fromisoformat(article["processed_at"])
-                meta_parts.append(dt.strftime("%Y-%m-%d"))
-            except ValueError:
-                pass
-
-        if meta_parts:
-            ctk.CTkLabel(
-                inner,
-                text="  •  ".join(meta_parts),
-                font=ctk.CTkFont(size=11),
-                text_color="gray",
-                wraplength=620,
-                justify="left",
-                anchor="w",
-            ).pack(fill="x", pady=(2, 0))
+        detail_frame = ctk.CTkFrame(card, fg_color=("gray90", "gray20"), corner_radius=6)
+        detail_frame.pack(fill="x", padx=8, pady=(0, 8))
+        self._detail_frames[article_id] = detail_frame
 
         # Summary
         summary = article.get("summary", "").strip()
         if summary:
             ctk.CTkLabel(
-                inner,
+                detail_frame,
+                text="Summary",
+                font=ctk.CTkFont(size=11, weight="bold"),
+                text_color="gray",
+            ).pack(anchor="w", padx=12, pady=(4, 0))
+            ctk.CTkLabel(
+                detail_frame,
                 text=summary,
                 font=ctk.CTkFont(size=12),
-                wraplength=620,
-                justify="left",
+                wraplength=580,
                 anchor="w",
-            ).pack(fill="x", pady=(6, 0))
+            ).pack(anchor="w", padx=12, pady=(0, 4))
+
+        # Implications
+        implications = article.get("implications", "").strip()
+        if implications:
+            ctk.CTkLabel(
+                detail_frame,
+                text="Implications",
+                font=ctk.CTkFont(size=11, weight="bold"),
+                text_color="gray",
+            ).pack(anchor="w", padx=12, pady=(4, 0))
+            ctk.CTkLabel(
+                detail_frame,
+                text=implications,
+                font=ctk.CTkFont(size=11),
+                wraplength=580,
+                anchor="w",
+            ).pack(anchor="w", padx=12, pady=(0, 4))
+
+        # Study details row
+        methodology = article.get("methodology", "")
+        reproducibility = article.get("reproducibility", "")
+        conflict_bias = article.get("conflict_bias", "")
+        has_study_details = methodology or reproducibility or (conflict_bias and conflict_bias != "NONE DETECTED")
+        if has_study_details:
+            ctk.CTkLabel(
+                detail_frame,
+                text="Methodology:",
+                font=ctk.CTkFont(size=11),
+                text_color="gray",
+            ).pack(anchor="w", padx=12, pady=(4, 0))
+            if methodology:
+                ctk.CTkLabel(
+                    detail_frame,
+                    text=methodology,
+                    font=ctk.CTkFont(size=11),
+                    anchor="w",
+                ).pack(anchor="w", padx=12, pady=(0, 2))
+            if reproducibility:
+                ctk.CTkLabel(
+                    detail_frame,
+                    text="Reproducibility:",
+                    font=ctk.CTkFont(size=11),
+                    text_color="gray",
+                ).pack(anchor="w", padx=12, pady=(2, 0))
+                ctk.CTkLabel(
+                    detail_frame,
+                    text=reproducibility,
+                    font=ctk.CTkFont(size=11),
+                    anchor="w",
+                ).pack(anchor="w", padx=12, pady=(0, 2))
+            if conflict_bias and conflict_bias != "NONE DETECTED":
+                ctk.CTkLabel(
+                    detail_frame,
+                    text="Conflict/Bias:",
+                    font=ctk.CTkFont(size=11),
+                    text_color="#FF9800",
+                ).pack(anchor="w", padx=12, pady=(2, 0))
+                ctk.CTkLabel(
+                    detail_frame,
+                    text=conflict_bias,
+                    font=ctk.CTkFont(size=11),
+                    anchor="w",
+                ).pack(anchor="w", padx=12, pady=(0, 2))
 
         # Relevance reason
         reason = article.get("relevance_reason", "").strip()
         if reason:
             ctk.CTkLabel(
-                inner,
-                text=f"Why relevant: {reason}",
-                font=ctk.CTkFont(size=11),
+                detail_frame,
+                text="Why relevant:",
+                font=ctk.CTkFont(size=11, weight="bold"),
                 text_color="gray",
-                wraplength=620,
-                justify="left",
-                anchor="w",
-            ).pack(fill="x", pady=(4, 0))
-
-        # Tags + open link
-        bottom = ctk.CTkFrame(inner, fg_color="transparent")
-        bottom.pack(fill="x", pady=(6, 0))
-
-        # Feedback buttons (Phase 2) — packed first so long tags don't push them off-screen
-        article_id = article.get("id")
-        current_feedback = article.get("feedback", "")
-
-        like_btn = ctk.CTkButton(
-            bottom, text="👍", width=36, height=22,
-            font=ctk.CTkFont(size=12),
-            fg_color=("#4CAF50", "#2E7D32") if current_feedback == "relevant" else ("gray75", "gray30"),
-            hover_color=("#388E3C", "#1B5E20"),
-            command=lambda aid=article_id: self._set_feedback(aid, "relevant", like_btn, dislike_btn),
-        )
-        like_btn.pack(side="left", padx=(0, 2))
-
-        dislike_btn = ctk.CTkButton(
-            bottom, text="👎", width=36, height=22,
-            font=ctk.CTkFont(size=12),
-            fg_color=("#F44336", "#C62828") if current_feedback == "not_relevant" else ("gray75", "gray30"),
-            hover_color=("#D32F2F", "#B71C1C"),
-            command=lambda aid=article_id: self._set_feedback(aid, "not_relevant", like_btn, dislike_btn),
-        )
-        dislike_btn.pack(side="left", padx=(2, 4))
-
-        tags_str = article.get("tags", "")
-        if tags_str:
-            # Truncate long tag strings so they don't overflow the row
-            display_tags = tags_str if len(tags_str) <= 80 else tags_str[:77] + "…"
+            ).pack(anchor="w", padx=12, pady=(4, 0))
             ctk.CTkLabel(
-                bottom,
-                text=display_tags,
-                font=ctk.CTkFont(size=10),
-                text_color="gray",
-            ).pack(side="left", padx=(4, 0))
-
-        url = article.get("url", "")
-        if url:
-            ctk.CTkButton(
-                bottom,
-                text="Open",
-                width=60,
-                height=22,
+                detail_frame,
+                text=reason,
                 font=ctk.CTkFont(size=11),
-                command=lambda u=url: _open_url(u),
-            ).pack(side="right")
+                wraplength=580,
+                anchor="w",
+            ).pack(anchor="w", padx=12, pady=(0, 4))
 
-        doi = article.get("doi", "")
-        if doi and not doi.startswith("PPI:"):
-            doi_url = f"https://doi.org/{doi}"
-            ctk.CTkButton(
-                bottom,
-                text="DOI",
-                width=50,
-                height=22,
-                font=ctk.CTkFont(size=11),
-                fg_color=("gray75", "gray30"),
-                hover_color=("gray65", "gray40"),
-                text_color=("black", "white"),
-                command=lambda u=doi_url: _open_url(u),
-            ).pack(side="right", padx=(0, 4))
+        # Tags — displayed as pills
+        tags_str = article.get("tags", "").strip()
+        if tags_str:
+            tag_list = [t.strip() for t in tags_str.split(",") if t.strip()]
+            if tag_list:
+                ctk.CTkLabel(
+                    detail_frame,
+                    text="Tags:",
+                    font=ctk.CTkFont(size=11, weight="bold"),
+                    text_color="gray",
+                ).pack(anchor="w", padx=12, pady=(4, 0))
+                PillFrame(
+                    detail_frame,
+                    items=tag_list,
+                    read_only=True,
+                ).pack(anchor="w", padx=12, pady=(2, 6))
 
-        # Edit + Delete buttons
-        edit_btn = ctk.CTkButton(
-            bottom,
+        # Action buttons row
+        btn_row = ctk.CTkFrame(detail_frame, fg_color="transparent")
+        btn_row.pack(fill="x", pady=(6, 8))
+
+        ctk.CTkButton(
+            btn_row,
+            text="Copy",
+            width=55,
+            height=22,
+            font=ctk.CTkFont(size=10),
+            fg_color=("gray75", "gray30"),
+            hover_color=("gray65", "gray40"),
+            text_color=("black", "white"),
+            command=lambda a=article: self._copy_article(a),
+        ).pack(side="right", padx=(2, 4))
+
+        ctk.CTkButton(
+            btn_row,
             text="Edit",
             width=55,
             height=22,
@@ -349,12 +434,10 @@ class ResultsTab:
             hover_color=("gray65", "gray40"),
             text_color=("black", "white"),
             command=lambda: self._edit_article(article),
-        )
-        edit_btn.pack(side="right", padx=(2, 4))
+        ).pack(side="right", padx=(2, 4))
 
-        article_id = article.get("id")
         ctk.CTkButton(
-            bottom,
+            btn_row,
             text="Delete",
             width=55,
             height=22,
@@ -364,6 +447,196 @@ class ResultsTab:
             text_color=("black", "white"),
             command=lambda aid=article_id: self._delete_article(aid),
         ).pack(side="right", padx=(2, 4))
+
+        doi = article.get("doi", "")
+        if doi and not doi.startswith("PPI:"):
+            doi_url = f"https://doi.org/{doi}"
+            ctk.CTkButton(
+                btn_row,
+                text="DOI",
+                width=50,
+                height=22,
+                font=ctk.CTkFont(size=10),
+                fg_color=("gray75", "gray30"),
+                hover_color=("gray65", "gray40"),
+                text_color=("black", "white"),
+                command=lambda u=doi_url: _open_url(u),
+            ).pack(side="right", padx=(0, 4))
+
+        url = article.get("url", "")
+        if url:
+            ctk.CTkButton(
+                btn_row,
+                text="Open",
+                width=60,
+                height=22,
+                font=ctk.CTkFont(size=10),
+                fg_color=("gray75", "gray30"),
+                hover_color=("gray65", "gray40"),
+                text_color=("black", "white"),
+                command=lambda u=url: _open_url(u),
+            ).pack(side="right", padx=(0, 4))
+
+    def _add_card(self, article: dict):
+        """Add a compact article row that expands on click to show full details."""
+        article_id = article.get("id")
+        score = article.get("relevance_score") or 0
+        score_color = "#4CAF50" if score >= 7 else "#FF9800" if score >= 4 else "gray"
+
+        # Main card frame
+        card = ctk.CTkFrame(self.scroll, corner_radius=6)
+        card.pack(fill="x", pady=(0, 6), padx=2)
+
+        # Clickable row frame
+        row_frame = ctk.CTkFrame(card, fg_color="transparent")
+        row_frame.pack(fill="x", padx=12, pady=8)
+
+        # Right side: expand indicator (packed first so it reserves space on the right)
+        indicator_label = ctk.CTkLabel(
+            row_frame,
+            text="▶",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            width=16,
+        )
+        indicator_label.pack(side="right", padx=(4, 0))
+
+        # Left side: vertical stack (title row + meta row)
+        left_frame = ctk.CTkFrame(row_frame, fg_color="transparent")
+        left_frame.pack(side="left", fill="x", expand=True)
+
+        # Row 1: score badge + feedback badge + title (all horizontal)
+        title_row = ctk.CTkFrame(left_frame, fg_color="transparent")
+        title_row.pack(fill="x")
+
+        ctk.CTkLabel(
+            title_row,
+            text=f"{score}/10",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=score_color,
+            width=40,
+        ).pack(side="left", padx=(0, 6))
+
+        title = article.get("title") or "Untitled"
+        title_label = ctk.CTkLabel(
+            title_row,
+            text=title,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            wraplength=520,
+            justify="left",
+            anchor="w",
+        )
+        title_label.pack(side="left", fill="x", expand=True)
+
+        # Row 2: authors • journal • year (below title)
+        meta_parts = []
+
+        # Authors: first author or "First, Second et al."
+        authors_raw = article.get("authors", "")
+        if authors_raw:
+            author_list = [a.strip() for a in str(authors_raw).split(",") if a.strip()]
+            if len(author_list) == 1:
+                meta_parts.append(author_list[0])
+            elif len(author_list) == 2:
+                meta_parts.append(f"{author_list[0]}, {author_list[1]}")
+            elif len(author_list) > 2:
+                meta_parts.append(f"{author_list[0]} et al.")
+
+        if article.get("journal"):
+            meta_parts.append(article["journal"])
+
+        date_val = article.get("date", "")
+        if date_val:
+            year = str(date_val)[:4]
+            if year.isdigit():
+                meta_parts.append(year)
+        elif article.get("processed_at"):
+            try:
+                meta_parts.append(datetime.fromisoformat(article["processed_at"]).strftime("%Y"))
+            except ValueError:
+                pass
+
+        meta_line = " • ".join(meta_parts)
+
+        if meta_line:
+            ctk.CTkLabel(
+                left_frame,
+                text=meta_line,
+                font=ctk.CTkFont(size=11),
+                text_color="gray",
+                anchor="w",
+                justify="left",
+                wraplength=520,
+            ).pack(fill="x", pady=(2, 0))
+
+        # Bind click to card toggle — pass `card` (vertical frame) so detail drops below row
+        def on_click(event):
+            self._toggle_expand(article_id, card, indicator_label)
+
+        for widget in (row_frame, title_label, indicator_label):
+            widget.bind("<Button-1>", on_click)
+
+        # If already expanded (page re-render), rebuild detail into card
+        if article_id in self._expanded:
+            self._build_detail_frame(article_id, card)
+
+    def _copy_article(self, article: dict):
+        """Copy article metadata + summary to clipboard as plain text."""
+        parts = []
+        if article.get("title"):
+            parts.append(article["title"])
+        if article.get("authors"):
+            parts.append(f"Authors: {article['authors']}")
+        if article.get("journal"):
+            date = f" ({article['date']})" if article.get("date") else ""
+            parts.append(f"Journal: {article['journal']}{date}")
+        if article.get("doi"):
+            parts.append(f"DOI: https://doi.org/{article['doi']}")
+        elif article.get("url"):
+            parts.append(f"URL: {article['url']}")
+        if article.get("relevance_score"):
+            parts.append(f"Relevance: {article['relevance_score']}/10")
+        if article.get("summary"):
+            parts.append(f"\nSummary: {article['summary']}")
+        if article.get("tags"):
+            parts.append(f"Tags: {article['tags']}")
+
+        text = "\n".join(parts)
+        self.master.clipboard_clear()
+        self.master.clipboard_append(text)
+
+    def _export_csv(self):
+        """Export all saved articles to a CSV file chosen by the user."""
+        articles = self.db.get_all_processed(limit=10000)
+        if not articles:
+            return
+
+        path = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+            initialfile="papermatcher_export.csv",
+        )
+        if not path:
+            return
+
+        fieldnames = [
+            "title", "authors", "journal", "date", "doi", "url", "pmid",
+            "relevance_score", "relevance_reason", "summary", "tags", "feedback",
+        ]
+        try:
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+                writer.writeheader()
+                for a in articles:
+                    # Reconstruct date from processed_at if not stored separately
+                    if not a.get("date") and a.get("processed_at"):
+                        try:
+                            a["date"] = datetime.fromisoformat(a["processed_at"]).strftime("%Y-%m-%d")
+                        except ValueError:
+                            pass
+                    writer.writerow(a)
+        except Exception as e:
+            print(f"Export error: {e}")
 
     def _edit_article(self, article: dict):
         """Open a dialog to edit article tags, score, and summary."""
@@ -399,11 +672,28 @@ class ResultsTab:
         summary_text.pack(fill="x", padx=15, pady=(0, 5))
         summary_text.insert("1.0", article.get("summary", ""))
 
-        # Tags field
-        ctk.CTkLabel(dialog, text="Tags (comma-separated):", font=ctk.CTkFont(size=12)).pack(anchor="w", padx=15, pady=(5, 2))
-        tags_entry = ctk.CTkEntry(dialog)
-        tags_entry.pack(fill="x", padx=15, pady=(0, 5))
-        tags_entry.insert(0, article.get("tags", ""))
+        # Tags field — pill editor
+        ctk.CTkLabel(dialog, text="Tags:", font=ctk.CTkFont(size=12)).pack(anchor="w", padx=15, pady=(5, 2))
+        tag_list_init = [t.strip() for t in article.get("tags", "").split(",") if t.strip()]
+        tag_scroll = ScrollableFrame(dialog, fg_color="transparent", height=60)
+        tag_pills = PillFrame(tag_scroll, items=tag_list_init, read_only=False)
+        tag_scroll.pack(fill="x", padx=15, pady=(0, 2))
+        tag_pills.pack(fill="x")
+
+        tag_add_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        tag_add_frame.pack(fill="x", padx=15, pady=(0, 5))
+        tag_add_entry = ctk.CTkEntry(tag_add_frame, placeholder_text="Add tag, press Enter…")
+        tag_add_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
+
+        def _add_tag(event=None):
+            raw = tag_add_entry.get().strip().strip("_").replace(" ", "_").lower()
+            if raw and raw not in tag_pills.get_items():
+                tag_pills.set_items(tag_pills.get_items() + [raw])
+            tag_add_entry.delete(0, "end")
+
+        tag_add_entry.bind("<Return>", _add_tag)
+        ctk.CTkButton(tag_add_frame, text="Add", width=55, height=28,
+                      command=_add_tag).pack(side="left")
 
         # Reason field
         ctk.CTkLabel(dialog, text="Relevance Reason:", font=ctk.CTkFont(size=12)).pack(anchor="w", padx=15, pady=(5, 2))
@@ -432,13 +722,14 @@ class ResultsTab:
                     article_id=article.get("id"),
                     relevance_score=score_var.get(),
                     summary=summary_text.get("1.0", "end").strip(),
-                    tags=tags_entry.get(),
+                    tags=tag_pills.get_string(),
                     relevance_reason=reason_text.get("1.0", "end").strip(),
                     include=include_var.get(),
                     feedback=feedback_var.get(),
                 )
                 dialog.destroy()
-                self.refresh()
+                self._last_count = -1
+                self.refresh(force=True)
             except Exception as e:
                 ctk.CTkLabel(dialog, text=f"Error: {e}", text_color="red").pack()
 

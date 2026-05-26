@@ -3,6 +3,7 @@
 import customtkinter as ctk
 
 from app.models.config import AppConfig
+from app.version import __version__
 from app.utils.db import ArticleDatabase
 from .profile_tab import ProfileTab
 from .results_tab import ResultsTab
@@ -18,7 +19,7 @@ class AppWindow:
         self.master = master
         self.config = config
 
-        master.title("PaperPilot - PubMed Article Tracker")
+        master.title(f"PaperMatcher v{__version__}")
         master.geometry("950x750")
         master.minsize(900, 700)
 
@@ -34,7 +35,7 @@ class AppWindow:
 
         title = ctk.CTkLabel(
             header,
-            text="PaperPilot",
+            text="PaperMatcher",
             font=ctk.CTkFont(size=28, weight="bold"),
         )
         title.pack(side="left")

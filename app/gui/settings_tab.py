@@ -2,6 +2,7 @@
 
 import json
 import queue
+import re
 import shutil
 import threading
 import urllib.request
@@ -18,31 +19,50 @@ OLLAMA_API = "http://localhost:11434"
 
 # Pre-set model names for screener / scorer combos
 SCREENER_LOCAL_MODEL = "llama3.2:latest"
-SCREENER_CLOUD_DEFAULT = "baidu/Qianfan-OCR-Fast:free"
+SCREENER_CLOUD_DEFAULT = "llama3.2:latest"
 
 SCORER_LOCAL_MODEL = "llama3.2:latest"
-SCORER_CLOUD_DEFAULT = "gpt-4o-mini"
+SCORER_CLOUD_DEFAULT = "deepseek/deepseek-v4-flash:free"
+
+# Suggested cloud models for dropdown
+CLOUD_MODELS = [
+    "deepseek/deepseek-v4-flash:free",
+    "gpt-4o-mini",
+    "gpt-4o",
+    "gpt-3.5-turbo",
+    "claude-3.5-sonnet",
+    "claude-3-opus",
+    "llama3.2",
+    "mistral-7b",
+]
 
 # Curated models for article relevance scoring + summarisation.
-# Chosen for strong instruction following at small size (3-5 GB).
+# Max ~5 GB — heavier models slow scoring significantly on consumer hardware.
+# Excluded: gemma3:4b (calibration failure), qwen3:4b (empty content field bug in Ollama).
 CURATED_MODELS = [
     {
         "id": "llama3.2:latest",
         "label": "Llama 3.2 - 3B  (Meta)",
         "size": "~2 GB",
-        "note": "Already installed - lightweight baseline",
+        "note": "Benchmarked: 98% end-to-end recall at t=6. Best fully-offline option.",
     },
     {
-        "id": "qwen3:4b",
-        "label": "Qwen 3 - 4B  (Alibaba)",
-        "size": "~2.6 GB",
-        "note": "Strong instruction following and classification at small size",
+        "id": "granite3.3:8b",
+        "label": "Granite 3.3 - 8B  (IBM)",
+        "size": "~5 GB",
+        "note": "Benchmarked: 88% end-to-end recall at t=3, 33% irrelevant pass-through. Best local precision.",
     },
     {
         "id": "gemma3:4b",
         "label": "Gemma 3 - 4B  (Google)",
         "size": "~3.3 GB",
-        "note": "Solid structured-output and scoring tasks",
+        "note": "Benchmarked: 91% end-to-end recall at t=6. Fast but similar noise level to llama3.2.",
+    },
+    {
+        "id": "mistral:7b",
+        "label": "Mistral - 7B",
+        "size": "~4.4 GB",
+        "note": "Benchmarked: 72% end-to-end recall at t=4, 33% irrelevant pass-through.",
     },
 ]
 
@@ -86,143 +106,220 @@ class SettingsTab:
         )
 
         # LLM Section
+        llm_header_row = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        llm_header_row.pack(fill="x", pady=(0, 12))
         ctk.CTkLabel(
-            self.scroll,
+            llm_header_row,
             text="LLM Configuration",
             font=ctk.CTkFont(size=18, weight="bold"),
-        ).pack(anchor="w", pady=(0, 15))
-
-        # Scoring Model (Bug 1 fix: removed duplicate Mode toggle;
-        # "Scoring Model" radio is the single control)
-        ctk.CTkLabel(
-            self.scroll, text="Scoring Model",
-            font=ctk.CTkFont(size=13, weight="bold"),
-        ).pack(anchor="w", pady=(5, 2))
-        ctk.CTkLabel(
-            self.scroll,
-            text="Choose where Pass 2 relevance scoring runs.",
-            font=ctk.CTkFont(size=11),
-            text_color="gray",
-        ).pack(anchor="w", pady=(0, 2))
-
-        scoring_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
-        scoring_frame.pack(fill="x", pady=(0, 12))
-
-        ctk.CTkRadioButton(
-            scoring_frame, text="Local (llama3.2, no API cost)",
-            variable=self.scoring_model_var, value="local",
-            command=self._on_scoring_model_change,
-        ).pack(side="left", padx=(0, 15))
-
-        ctk.CTkRadioButton(
-            scoring_frame, text="Cloud (my API key)",
-            variable=self.scoring_model_var, value="cloud",
-            command=self._on_scoring_model_change,
         ).pack(side="left")
-
-        # --- Pass 2 model selection (replaces "Default Model") ---
-        self._pass2_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
-        self._pass2_frame.pack(fill="x", pady=(0, 12))
-
-        ctk.CTkLabel(
-            self._pass2_frame, text="Pass 2 model:",
+        ctk.CTkButton(
+            llm_header_row,
+            text="💡 Suggested Setup",
+            width=155, height=28,
+            fg_color="transparent",
+            border_width=1,
             font=ctk.CTkFont(size=12),
-        ).pack(side="left", padx=(0, 8))
+            command=self._show_suggested_setup,
+        ).pack(side="right", pady=(4, 0))
 
-        self.model_combo = ctk.CTkComboBox(
-            self._pass2_frame, width=300,
-            values=["gpt-4o-mini"] + self.config.llm.model_options(),
+        # Helper to build a Local/Cloud model section (Pass 1 or Pass 2)
+        def _build_model_section(label: str, mode_var: ctk.StringVar,
+                                 on_change, local_models: list,
+                                 default_local: str, default_cloud_url: str,
+                                 default_cloud_model: str, default_key: str,
+                                 ) -> dict:
+            """Build a self-contained Pass N section. Returns widget refs dict."""
+            sep = ctk.CTkFrame(self.scroll, height=2, fg_color="gray75")
+            sep.pack(fill="x", pady=(8, 6))
+            ctk.CTkLabel(self.scroll, text=label,
+                         font=ctk.CTkFont(size=14, weight="bold"),
+                         ).pack(anchor="w", pady=(2, 4))
+
+            radio_row = ctk.CTkFrame(self.scroll, fg_color="transparent")
+            radio_row.pack(fill="x", pady=(0, 8))
+            ctk.CTkRadioButton(radio_row, text="Local (Ollama)",
+                               variable=mode_var, value="local",
+                               command=on_change,
+                               ).pack(side="left", padx=(0, 20))
+            ctk.CTkRadioButton(radio_row, text="Cloud (API)",
+                               variable=mode_var, value="cloud",
+                               command=on_change,
+                               ).pack(side="left")
+
+            # Wrapper always packed — local/cloud swap inside it
+            content_wrapper = ctk.CTkFrame(self.scroll, fg_color="transparent")
+            content_wrapper.pack(fill="x", pady=(0, 6))
+
+            # Local model combo
+            local_frame = ctk.CTkFrame(content_wrapper, fg_color="transparent")
+            local_frame.pack(fill="x")
+            ctk.CTkLabel(local_frame, text="Model:",
+                         font=ctk.CTkFont(size=12), width=70, anchor="w",
+                         ).pack(side="left")
+            local_combo = ctk.CTkComboBox(local_frame, values=local_models, width=300)
+            local_combo.set(default_local)
+            local_combo.pack(side="left", fill="x", expand=True)
+
+            # Cloud fields (not packed initially)
+            cloud_frame = ctk.CTkFrame(content_wrapper, fg_color="transparent")
+
+            def _row(parent, lbl, widget_factory):
+                r = ctk.CTkFrame(parent, fg_color="transparent")
+                r.pack(fill="x", pady=(0, 4))
+                ctk.CTkLabel(r, text=lbl, font=ctk.CTkFont(size=12),
+                             width=70, anchor="w").pack(side="left")
+                w = widget_factory(r)
+                w.pack(side="left", fill="x", expand=True)
+                return w
+
+            url_combo = _row(cloud_frame, "URL:",
+                             lambda p: ctk.CTkComboBox(p, values=[
+                                 "https://openrouter.ai/api/v1",
+                                 "https://api.openai.com/v1",
+                                 "https://api.anthropic.com/v1",
+                                 "https://generativelanguage.googleapis.com/v1beta/openai",
+                                 "http://localhost:11434/v1",
+                                 "http://localhost:1234/v1",
+                                 "http://localhost:4000/v1",
+                             ]))
+            url_combo.set(default_cloud_url)
+
+            model_entry = _row(cloud_frame, "Model:",
+                               lambda p: ctk.CTkComboBox(p, values=CLOUD_MODELS))
+            model_entry.set(default_cloud_model)
+
+            key_row = ctk.CTkFrame(cloud_frame, fg_color="transparent")
+            key_row.pack(fill="x", pady=(0, 4))
+            ctk.CTkLabel(key_row, text="API Key:", font=ctk.CTkFont(size=12),
+                         width=70, anchor="w").pack(side="left")
+            key_entry = ctk.CTkEntry(key_row, show="*")
+            key_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
+            if default_key:
+                key_entry.insert(0, default_key)
+            ctk.CTkButton(key_row, text="Show", width=55, height=28,
+                          fg_color=("gray75", "gray30"),
+                          hover_color=("gray65", "gray40"),
+                          text_color=("black", "white"),
+                          font=ctk.CTkFont(size=11),
+                          command=lambda e=key_entry: self._toggle_key_visibility(e),
+                          ).pack(side="left")
+
+            return {
+                "local_frame": local_frame,
+                "cloud_frame": cloud_frame,
+                "local_combo": local_combo,
+                "url_combo": url_combo,
+                "model_entry": model_entry,
+                "key_entry": key_entry,
+            }
+
+        _local_models = [
+            "llama3.2:latest", "gemma3:4b", "llama3.1:8b",
+            "mistral:7b", "qwen3.5:4b", "granite3.3:8b",
+        ]
+
+        # ── Pass 1 — Screener ─────────────────────────────────────────────
+        self._p1 = _build_model_section(
+            label="Pass 1 — Screener Model",
+            mode_var=self.screening_model_var,
+            on_change=self._on_screening_model_change,
+            local_models=_local_models,
+            default_local=(self.config.llm.screening_model_name
+                           if self.config.llm.screening_model == "local"
+                           else "llama3.2:latest"),
+            default_cloud_url=self.config.llm.screening_base_url or "https://openrouter.ai/api/v1",
+            default_cloud_model=(self.config.llm.screening_model_name
+                                 if self.config.llm.screening_model == "cloud"
+                                 else SCREENER_CLOUD_DEFAULT),
+            default_key=self.config.llm.screening_api_key or "",
         )
-        self.model_combo.set(self.config.llm.model or "gpt-4o-mini")
-        self.model_combo.pack(side="left", fill="x", expand=True, padx=(0, 12))
 
-        self._apply_scoring_model_ui()
-
-        # --- OpenRouter API Key (shown when cloud scoring selected) ---
-        self._openrouter_key_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
-        self._openrouter_key_frame.pack(fill="x", pady=(0, 12))
-
-        ctk.CTkLabel(
-            self._openrouter_key_frame, text="OpenRouter API Key",
-            font=ctk.CTkFont(size=13, weight="bold"),
-        ).pack(anchor="w", pady=(5, 2))
-        ctk.CTkLabel(
-            self._openrouter_key_frame,
-            text="Enter your OpenRouter key for cloud scoring (free tier: ~50 req/day).",
-            font=ctk.CTkFont(size=11),
-            text_color="gray",
-        ).pack(anchor="w", pady=(0, 2))
-        self.openrouter_key_entry = ctk.CTkEntry(self._openrouter_key_frame, show="*")
-        self.openrouter_key_entry.pack(fill="x", pady=(0, 8))
-        if self.config.llm.openrouter_key:
-            self.openrouter_key_entry.insert(0, self.config.llm.openrouter_key)
-
-        # --- API Base URL (shown when cloud scoring or cloud screener) ---
-        self._base_url_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
-        self._base_url_frame.pack(fill="x", pady=(0, 12))
-
-        ctk.CTkLabel(
-            self._base_url_frame, text="API Base URL",
-            font=ctk.CTkFont(size=13, weight="bold"),
-        ).pack(anchor="w", pady=(5, 2))
-        self.url_combo = ctk.CTkComboBox(
-            self._base_url_frame,
-            values=["https://api.openai.com/v1"] + self.config.llm.base_url_options(),
+        # Test Pass 1 button
+        p1_test_row = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        p1_test_row.pack(fill="x", pady=(4, 8))
+        self.test_screener_btn = ctk.CTkButton(
+            p1_test_row, text="Test Pass 1 (Screener)",
+            command=self._test_screener,
         )
-        self.url_combo.set(self.config.llm.base_url or "https://api.openai.com/v1")
-        self.url_combo.pack(fill="x", pady=(0, 12))
+        self.test_screener_btn.pack(side="left")
+        self.p1_test_result = ctk.CTkLabel(
+            p1_test_row, text="", font=ctk.CTkFont(size=12))
+        self.p1_test_result.pack(side="left", padx=(12, 0))
 
-        # --- Screener Model Override (Bug 1 extra: option for cloud Pass 1) ---
-        sep1 = ctk.CTkFrame(self.scroll, height=2, fg_color="gray75")
-        sep1.pack(fill="x", pady=(15, 5))
+        # ── Pass 2 — Scoring ─────────────────────────────────────────────
+        self._p2 = _build_model_section(
+            label="Pass 2 — Scoring Model",
+            mode_var=self.scoring_model_var,
+            on_change=self._on_scoring_model_change,
+            local_models=_local_models,
+            default_local=(self.config.llm.model
+                           if self.config.llm.scoring_model == "local"
+                           else "llama3.2:latest"),
+            default_cloud_url=self.config.llm.base_url or "https://openrouter.ai/api/v1",
+            default_cloud_model=(self.config.llm.model
+                                 if self.config.llm.scoring_model == "cloud"
+                                 else SCORER_CLOUD_DEFAULT),
+            default_key=self.config.llm.openrouter_key or "",
+        )
+
+        # Test Pass 2 button
+        p2_test_row = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        p2_test_row.pack(fill="x", pady=(4, 8))
+        self.test_btn = ctk.CTkButton(
+            p2_test_row, text="Test Pass 2 (Scoring)",
+            command=self._test_llm,
+        )
+        self.test_btn.pack(side="left")
+        self.test_result = ctk.CTkLabel(
+            p2_test_row, text="", font=ctk.CTkFont(size=12))
+        self.test_result.pack(side="left", padx=(12, 0))
+        ctk.CTkLabel(self.scroll, text="The 'Use' button below sets the selected model as your scoring model (Pass 2). To change the screening model (Pass 1), use the Pass 1 section above.",
+                     font=ctk.CTkFont(size=10), text_color="gray", wraplength=550, justify="left").pack(anchor="w", pady=(2, 4))
+
+        # Apply initial visibility
+        self._on_screening_model_change()
+        self._on_scoring_model_change()
+
+        # Compatibility shims for methods that reference old widget names
+        self._test_frame = p2_test_row  # used by nothing now but kept safe
+
+
+        # --- NCBI API Key (Phase 3: higher throughput) ---
+        sep_ncbi = ctk.CTkFrame(self.scroll, height=2, fg_color="gray75")
+        sep_ncbi.pack(fill="x", pady=(15, 5))
+
+        self._ncbi_key_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        self._ncbi_key_frame.pack(fill="x", pady=(0, 12))
 
         ctk.CTkLabel(
-            self.scroll,
-            text="Screener Model (Pass 1)",
+            self._ncbi_key_frame,
+            text="NCBI API Key (optional)",
             font=ctk.CTkFont(size=13, weight="bold"),
         ).pack(anchor="w", pady=(5, 2))
         ctk.CTkLabel(
-            self.scroll,
-            text="Override the default local screener (llama3.2 via Ollama) with a cloud API.\n"
-                 "Only applies when scoring model is also set to Cloud.",
+            self._ncbi_key_frame,
+            text="An NCBI API key increases rate limit from 3 to 10 req/sec and raises retmax to 500. "
+            "Save in ~/.papermatcher/ncbi_api_key.txt or enter here.",
             font=ctk.CTkFont(size=11),
             text_color="gray",
             wraplength=550,
         ).pack(anchor="w", pady=(0, 2))
 
-        screen_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
-        screen_frame.pack(fill="x", pady=(0, 12))
-
-        ctk.CTkRadioButton(
-            screen_frame, text="Local (llama3.2 via Ollama — default)",
-            variable=self.screening_model_var, value="local",
-            command=self._on_screening_model_change,
-        ).pack(side="left", padx=(0, 15))
-
-        ctk.CTkRadioButton(
-            screen_frame, text="Cloud (API — uses Pass 2 model for screening)",
-            variable=self.screening_model_var, value="cloud",
-            command=self._on_screening_model_change,
+        ncbi_entry_row = ctk.CTkFrame(self._ncbi_key_frame, fg_color="transparent")
+        ncbi_entry_row.pack(fill="x", pady=(0, 8))
+        self.ncbi_key_entry = ctk.CTkEntry(ncbi_entry_row, show="*")
+        self.ncbi_key_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        ctk.CTkButton(
+            ncbi_entry_row, text="Show", width=55, height=28,
+            fg_color=("gray75", "gray30"), hover_color=("gray65", "gray40"),
+            text_color=("black", "white"), font=ctk.CTkFont(size=11),
+            command=lambda: self._toggle_key_visibility(self.ncbi_key_entry),
         ).pack(side="left")
+        if self.config.llm.ncbi_api_key:
+            self.ncbi_key_entry.insert(0, self.config.llm.ncbi_api_key)
 
-        # Screener model name entry (shown when cloud screener selected)
-        self._screener_model_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
-        self._screener_model_frame.pack(fill="x", pady=(0, 12))
-
-        ctk.CTkLabel(
-            self._screener_model_frame, text="Screener model name:",
-            font=ctk.CTkFont(size=12),
-        ).pack(side="left", padx=(0, 8))
-        self.screener_model_entry = ctk.CTkEntry(self._screener_model_frame, width=300)
-        self.screener_model_entry.pack(side="left", fill="x", expand=True)
-        self.screener_model_entry.insert(
-            0, self.config.llm.screening_model_name or SCREENER_CLOUD_DEFAULT
-        )
-
-        self._toggle_screener_model_ui()
-        self._toggle_base_url_visibility()
-
-        # Relevance Threshold
+        # --- Relevance Threshold ---
         sep2 = ctk.CTkFrame(self.scroll, height=2, fg_color="gray75")
         sep2.pack(fill="x", pady=(15, 5))
 
@@ -260,27 +357,6 @@ class SettingsTab:
         )
         self.threshold_label.pack(side="left", padx=(10, 0))
 
-        # Test LLM button
-        test_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
-        test_frame.pack(fill="x", pady=(10, 20))
-
-        self.test_btn = ctk.CTkButton(
-            test_frame, text="Test LLM Connection",
-            command=self._test_llm,
-        )
-        self.test_btn.pack(side="left")
-
-        self.test_result = ctk.CTkLabel(
-            test_frame, text="", font=ctk.CTkFont(size=12)
-        )
-        self.test_result.pack(side="left", padx=(15, 0))
-
-        # --- Visibility toggles on init ---
-        if self.scoring_model_var.get() != "cloud":
-            self._openrouter_key_frame.pack_forget()
-            self._base_url_frame.pack_forget()
-        if self.screening_model_var.get() != "cloud":
-            self._screener_model_frame.pack_forget()
 
         # -- Ollama Model Installer --
         sep3 = ctk.CTkFrame(self.scroll, height=2, fg_color="gray75")
@@ -433,7 +509,7 @@ class SettingsTab:
         # Message below the button (outside any box)
         self.reset_msg_label = ctk.CTkLabel(
             reset_frame,
-            text="This will reset config & database. Backups saved in Journal_Tracker/. Restart required.",
+            text="This will reset config & database. Backups saved in ~/Documents/PaperMatcher Backups/. Restart required.",
             font=ctk.CTkFont(size=11),
             text_color="gray",
         )
@@ -448,15 +524,15 @@ class SettingsTab:
         scoring = self.scoring_model_var.get()
         screening = self.screening_model_var.get()
 
+        p2_model = (self._p2["local_combo"].get() if hasattr(self, "_p2") else "llama3.2:latest")
+        p1_model = (self._p1["local_combo"].get() if hasattr(self, "_p1") else "llama3.2:latest")
         scoring_label = (
-            "llama3.2 (local)"
-            if scoring == "local"
-            else f"{self.model_combo.get()} (cloud)"
+            f"{p2_model} (local)" if scoring == "local"
+            else f"{(self._p2['model_entry'].get() if hasattr(self, '_p2') else '')} (cloud)"
         )
         screening_label = (
-            "llama3.2 (local)"
-            if screening == "local"
-            else f"{self.screener_model_entry.get()} (cloud)"
+            f"{p1_model} (local)" if screening == "local"
+            else f"{(self._p1['model_entry'].get() if hasattr(self, '_p1') else '')} (cloud)"
         )
         tier = "VIP" if DISTRIBUTION_TIER == "vip" else "Prototype"
 
@@ -469,34 +545,30 @@ class SettingsTab:
         )
 
     def _apply_scoring_model_ui(self):
-        """Show model combo with correct default based on scoring mode."""
-        mode = self.scoring_model_var.get()
-        if mode == "cloud":
-            self.model_combo.configure(
-                values=["gpt-4o-mini"] + self.config.llm.model_options(),
-            )
-            self.model_combo.set(self.config.llm.model or SCORER_CLOUD_DEFAULT)
-        else:
-            self.model_combo.set(SCORER_LOCAL_MODEL)
-
+        """No-op — model selection is now handled by _on_scoring_model_change."""
         self._update_tier_status()
 
-    def _toggle_base_url_visibility(self):
-        """Show base URL when either sco or screener uses cloud."""
-        scoring_cloud = self.scoring_model_var.get() == "cloud"
-        screening_cloud = self.screening_model_var.get() == "cloud"
-        if scoring_cloud or screening_cloud:
-            self._base_url_frame.pack(fill="x", pady=(0, 12))
+    def _toggle_key_visibility(self, entry: ctk.CTkEntry):
+        """Toggle an API key entry between hidden (***) and visible text."""
+        if entry.cget("show") == "*":
+            entry.configure(show="")
         else:
-            self._base_url_frame.pack_forget()
+            entry.configure(show="*")
+
+    def _toggle_base_url_visibility(self):
+        """No-op — URL fields are now embedded per-section."""
+        pass
 
     def _toggle_screener_model_ui(self):
-        """Show screener model entry only when cloud screener is selected."""
+        """Show local or cloud fields for Pass 1."""
+        if not hasattr(self, "_p1"):
+            return
         if self.screening_model_var.get() == "cloud":
-            self._screener_model_frame.pack(fill="x", pady=(0, 12))
+            self._p1["local_frame"].pack_forget()
+            self._p1["cloud_frame"].pack(fill="x")
         else:
-            self._screener_model_frame.pack_forget()
-        self._toggle_base_url_visibility()
+            self._p1["cloud_frame"].pack_forget()
+            self._p1["local_frame"].pack(fill="x")
         self._update_tier_status()
 
     # ------------------------------------------------------------------
@@ -504,22 +576,29 @@ class SettingsTab:
     # ------------------------------------------------------------------
 
     def _on_mode_change(self):
-        """Legacy handler — kept for compatibility with onboarding calls."""
-        pass  # Mode toggle removed; scoring_model_var drives everything
+        """Legacy handler — kept for compatibility."""
+        pass
 
     def _on_scoring_model_change(self):
-        """Update UI when scoring model radio changes."""
-        self._apply_scoring_model_ui()
-        self._toggle_base_url_visibility()
-
+        """Show local or cloud fields for Pass 2."""
+        if not hasattr(self, "_p2"):
+            return
         if self.scoring_model_var.get() == "cloud":
-            self._openrouter_key_frame.pack(fill="x", pady=(0, 12))
+            self._p2["local_frame"].pack_forget()
+            self._p2["cloud_frame"].pack(fill="x")
         else:
-            self._openrouter_key_frame.pack_forget()
+            self._p2["cloud_frame"].pack_forget()
+            self._p2["local_frame"].pack(fill="x")
+        self._update_tier_status()
 
     def _on_screening_model_change(self):
         """Update UI when screener model radio changes."""
         self._toggle_screener_model_ui()
+
+    def _on_url_change(self, event=None):
+        """No-op — URL fields are now per-section."""
+        pass
+
 
     # ------------------------------------------------------------------
     # Ollama helpers
@@ -539,6 +618,16 @@ class SettingsTab:
                 return {m["name"] for m in data.get("models", [])}
         except Exception:
             return set()
+
+    def _fetch_installed_models(self) -> list[str]:
+        """Fetch installed Ollama models, return sorted list of names."""
+        try:
+            with urllib.request.urlopen(f"{OLLAMA_API}/api/tags", timeout=2) as resp:
+                data = json.loads(resp.read())
+                models = [m["name"] for m in data.get("models", [])]
+                return sorted(models)
+        except Exception:
+            return []
 
     def _refresh_ollama_status(self):
         """Check Ollama status in a background thread, update UI when done."""
@@ -602,10 +691,10 @@ class SettingsTab:
             self._ollama_status_label.configure(text=f"Failed to start: {e}", text_color="#F44336")
 
     def _use_model(self, model_id: str):
-        """Fill in model combo and switch to local mode."""
+        """Set Pass 2 to local mode with the selected model."""
         self.scoring_model_var.set("local")
         self._on_scoring_model_change()
-        self.model_combo.set(model_id)
+        self._p2["local_combo"].set(model_id)
 
     def _install_model(self, model_id: str):
         """Pull a model from Ollama in a background thread with progress."""
@@ -695,42 +784,72 @@ class SettingsTab:
     # ------------------------------------------------------------------
 
     def _test_llm(self):
-        """Test LLM connection."""
+        """Test Pass 2 (Scoring) LLM connection."""
         self.test_result.configure(text="Testing...", text_color="gray")
         self.master.update()
-
         try:
-            client = LLMClient(
-                base_url=self.url_combo.get(),
-                api_key=self.openrouter_key_entry.get(),
-                model=self.model_combo.get(),
-                scoring_model=self.scoring_model_var.get(),
-                openrouter_key=self.openrouter_key_entry.get(),
-                screening_model=self.screening_model_var.get(),
-                screening_model_name=self.screener_model_entry.get(),
-            )
-            success, msg = client.test_connection()
-
-            if success:
-                # Save this successful pairing for future dropdown use
-                self.config.llm.add_pairing(
-                    self.model_combo.get(), self.url_combo.get()
-                )
-                self.test_result.configure(
-                    text=f"OK: {msg}", text_color="#4CAF50"
+            scoring = self.scoring_model_var.get()
+            if scoring == "local":
+                model = self._p2["local_combo"].get()
+                client = LLMClient(
+                    base_url="http://localhost:11434/v1",
+                    api_key="not-needed",
+                    model=model,
+                    scoring_model="local",
                 )
             else:
-                self.test_result.configure(
-                    text=f"Connection failed: {msg}\n"
-                         "Check your API key, base URL, and that the model name is correct.",
-                    text_color="#F44336",
+                url = self._p2["url_combo"].get()
+                model = self._p2["model_entry"].get()
+                key = self._p2["key_entry"].get()
+                client = LLMClient(
+                    base_url=url, api_key=key, model=model,
+                    scoring_model="cloud", openrouter_key=key,
                 )
+            success, msg = client.test_connection(pass1=False)
+            if success:
+                self.test_result.configure(text=f"OK: {msg}", text_color="#4CAF50")
+            else:
+                self.test_result.configure(
+                    text=f"Failed: {msg}", text_color="#F44336")
         except Exception as e:
-            self.test_result.configure(
-                text=f"Error: {str(e)}\n"
-                     "Make sure the base URL is reachable and your API key is valid.",
-                text_color="#F44336",
-            )
+            self.test_result.configure(text=f"Error: {e}", text_color="#F44336")
+
+    def _test_screener(self):
+        """Test Pass 1 (Screener) connection."""
+        self.p1_test_result.configure(text="Testing...", text_color="gray")
+        self.master.update()
+        try:
+            screening = self.screening_model_var.get()
+            if screening == "local":
+                model = self._p1["local_combo"].get()
+                client = LLMClient(
+                    base_url="http://localhost:11434/v1",
+                    api_key="not-needed",
+                    model=model,
+                    scoring_model="local",
+                    screening_model="local",
+                    screening_model_name=model,
+                )
+            else:
+                url = self._p1["url_combo"].get()
+                model = self._p1["model_entry"].get()
+                key = self._p1["key_entry"].get()
+                client = LLMClient(
+                    base_url=url, api_key=key, model=model,
+                    scoring_model="cloud",
+                    screening_model="cloud",
+                    screening_model_name=model,
+                    screening_base_url=url,
+                    screening_api_key=key,
+                )
+            success, msg = client.test_connection(pass1=True)
+            if success:
+                self.p1_test_result.configure(text=f"OK: {msg}", text_color="#4CAF50")
+            else:
+                self.p1_test_result.configure(
+                    text=f"Failed: {msg}", text_color="#F44336")
+        except Exception as e:
+            self.p1_test_result.configure(text=f"Error: {e}", text_color="#F44336")
 
     def _confirm_reset(self):
         """Show confirmation popup before resetting."""
@@ -748,7 +867,7 @@ class SettingsTab:
         ctk.CTkLabel(
             dialog,
             text="Config and database will be backed up and then deleted.\n"
-                 "You will need to restart PaperPilot to re-run onboarding.",
+                 "You will need to restart PaperMatcher to re-run onboarding.",
             font=ctk.CTkFont(size=11),
             text_color="gray",
         ).pack(pady=(0, 15))
@@ -768,9 +887,9 @@ class SettingsTab:
         """Reset all settings by deleting config and database (with backups)."""
         from pathlib import Path
 
-        config_path = Path.home() / ".paperPilot" / "config.json"
-        db_path = Path.home() / ".paperPilot" / "paperpilot.db"
-        backups_dir = Path.home() / "Documents" / "Claude" / "Projects" / "Journal_Tracker"
+        config_path = Path.home() / ".papermatcher" / "config.json"
+        db_path = Path.home() / ".papermatcher" / "papermatcher.db"
+        backups_dir = Path.home() / "Documents" / "PaperMatcher Backups"
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         msgs = []
@@ -803,16 +922,208 @@ class SettingsTab:
             self.test_result.configure(text="No config or DB found to reset.", text_color="gray")
 
     # ------------------------------------------------------------------
+    # Suggested Setup Dialog
+    # ------------------------------------------------------------------
+
+    def _show_suggested_setup(self):
+        """Show the Suggested OpenRouter Setup dialog."""
+        dialog = ctk.CTkToplevel(self.master)
+        dialog.title("Suggested OpenRouter Setup")
+        dialog.geometry("640x600")
+        dialog.resizable(True, True)
+        dialog.minsize(560, 480)
+
+        # Title
+        ctk.CTkLabel(
+            dialog,
+            text="Suggested OpenRouter Setup",
+            font=ctk.CTkFont(size=15, weight="bold"),
+        ).pack(anchor="w", padx=15, pady=(15, 10))
+
+        # Scrollable frame with textbox
+        scroll_frame = ctk.CTkScrollableFrame(dialog)
+        scroll_frame.pack(fill="both", expand=True, padx=15, pady=(0, 10))
+
+        textbox = ctk.CTkTextbox(
+            scroll_frame,
+            wrap="word",
+            height=380,
+        )
+        textbox.pack(fill="both", expand=True)
+        textbox.insert("1.0", """★ DEFAULT RECOMMENDATION (easiest setup, no AI experience needed)
+────────────────────────────────────────
+Use llama3.2:latest for BOTH Pass 1 and Pass 2.
+No API key. No internet required after setup. Just install
+Ollama, pull llama3.2:latest, and run.
+
+   Pass 1 (Screener): llama3.2:latest  (local, already default)
+   Pass 2 (Scoring):  llama3.2:latest  (local, set threshold to 6)
+
+Trade-off: very high recall (98%) but more irrelevant papers
+reach your review queue. The human review step at the end
+lets you catch and reject them.
+
+────────────────────────────────────────
+
+PASS 1 — Screener Model
+────────────────────────────────────────
+The screener asks one question per article: is this paper
+on-topic? It runs locally and is the first filter before
+any API call is made.
+
+Benchmark (92 labeled papers, one research area):
+   llama3.2:latest   100% recall  ~0.3s/paper  ← recommended
+   gemma3:4b          93% recall  ~0.9s/paper
+   llama3.1:8b       100% recall  ~1.7s/paper  (slower, no benefit)
+   mistral:7b        100% recall  ~1.8s/paper  (slower, runs hot)
+
+Recommendation: keep llama3.2:latest as your screener.
+No other tested model improved on it. That said, you can
+switch to any Ollama model or use a cloud API for Pass 1
+if you prefer — use the selector above.
+
+────────────────────────────────────────
+
+PASS 2 — Scoring Model (benchmarked configs)
+────────────────────────────────────────
+The scoring model reads each paper that passed Pass 1 and
+scores it 1–10 against your research profile. This is where
+most of the quality difference comes from.
+
+Test set: 92 papers labeled relevant / borderline / irrelevant
+for a single PhD research area (neuropathic pain, microglia).
+All configs used llama3.2:latest for Pass 1.
+
+   Config                                                                 Threshold  Recall  Noise   Time
+   ────────────────────────────────────────
+★  deepseek-v4-flash:free (cloud)                  t=4      86%     33%   ~4.4m
+★  llama3.2:latest (local)                                    t=6      98%     67%   ~5.4m
+   granite3.3:8b (local)                                    t=3      88%     33%   ~15m
+   gemma3:4b (local)                                      t=6      91%     67%   ~6.6m
+
+Recall = papers correctly identified as relevant.
+Noise = irrelevant papers that still pass the threshold
+        (you will see these in the review queue).
+
+────────────────────────────────────────
+
+LOCAL OLLAMA SETUP (Pass 2)
+────────────────────────────────────────
+No API key, no rate limits, no data leaves your machine.
+Set API Base URL to http://localhost:11434, enter model name.
+
+   llama3.2:latest   3B  ~2 GB   — best local recall
+   granite3.3:8b     8B  ~5 GB   — best local precision
+   gemma3:4b         4B  ~3.3 GB — fast, good recall
+   mistral:7b        7B  ~4.4 GB — good precision, runs hot
+
+Cloud-compatible local APIs (Groq, Together AI, LM Studio)
+also work with the same URL format.
+
+────────────────────────────────────────
+
+CLOUD SETUP (OpenRouter)
+────────────────────────────────────────
+1. Create a free account at openrouter.ai
+2. Go to Keys → Create Key
+3. Paste the key into the OpenRouter API Key field above
+4. Set API Base URL to: https://openrouter.ai/api/v1
+5. Enter your chosen model name in the scoring model field
+
+⚠  Free tier rate limits
+   Each article scored = 1 API request. The free tier gives
+   ~50 req/day — in practice you may hit this after fewer
+   than 10 requests. Add $10 USD credit to raise the limit
+   to 1,000 req/day. For 20–50 articles per run, $10 lasts
+   a long time.
+
+★ Free models (as of May 2026)
+   deepseek/deepseek-v4-flash:free  — recommended, no prompt
+                                      training required
+   openrouter/owl-alpha:free        — requires prompt training
+   nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free
+                                    — requires prompt training
+
+   Enable prompt training (for non-DeepSeek free models):
+   OpenRouter → Settings → Privacy → Allow prompt training
+
+Paid models (no daily limit, no prompt training)
+   deepseek/deepseek-v4-flash   $0.126 / $0.252 per 1M tokens
+   deepseek/deepseek-v4-pro     $0.435 / $0.87  per 1M tokens
+
+Why DeepSeek? Not brand loyalty — it's simply the best
+cost-to-performance fit for this task. Scoring 30–50 short
+abstracts requires fast, instruction-following responses,
+not deep reasoning or large context. DeepSeek V4 Flash is
+very cheap and handles this well. That said, you can use
+any provider: OpenAI, Anthropic, Gemini, Mistral, etc. —
+any OpenAI-compatible API URL works. Use whatever you're
+comfortable with or already have credits for.
+
+ℹ  Model availability changes frequently.
+   Check openrouter.ai/models for current options.""")
+        # Keep state="normal" so text is selectable; block keyboard edits
+        def _guard(event):
+            if event.state & 0xF:
+                return
+            if event.keysym in ("Left", "Right", "Up", "Down", "Home", "End",
+                                 "Prior", "Next", "Shift_L", "Shift_R"):
+                return
+            return "break"
+        textbox._textbox.bind("<Key>", _guard, add="+")
+
+        # Close button
+        def _close():
+            dialog.destroy()
+
+        btn_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=15, pady=(0, 15))
+
+        close_btn = ctk.CTkButton(
+            btn_frame,
+            text="Close",
+            command=_close,
+        )
+        close_btn.pack()
+
+        # Bind keyboard shortcuts
+        dialog.bind("<Return>", lambda e: _close())
+        dialog.bind("<Escape>", lambda e: _close())
+
+        # Show dialog
+        self.master.update()
+        dialog.after(150, lambda: (dialog.lift(), dialog.focus_force()))
+
+    # ------------------------------------------------------------------
     # Config persistence
     # ------------------------------------------------------------------
 
     def save_to_config(self):
         """Save current values to config."""
-        self.config.llm.scoring_model = self.scoring_model_var.get()
-        self.config.llm.model = self.model_combo.get()
-        self.config.llm.base_url = self.url_combo.get()
-        self.config.llm.api_key = self.openrouter_key_entry.get() if self.scoring_model_var.get() == "cloud" else ""
-        self.config.llm.relevance_threshold = self.threshold_var.get()
-        self.config.llm.openrouter_key = self.openrouter_key_entry.get()
+        # Pass 1
         self.config.llm.screening_model = self.screening_model_var.get()
-        self.config.llm.screening_model_name = self.screener_model_entry.get()
+        if self.screening_model_var.get() == "local":
+            self.config.llm.screening_model_name = self._p1["local_combo"].get()
+            self.config.llm.screening_base_url = ""
+            self.config.llm.screening_api_key = ""
+        else:
+            self.config.llm.screening_model_name = self._p1["model_entry"].get()
+            self.config.llm.screening_base_url = self._p1["url_combo"].get()
+            self.config.llm.screening_api_key = self._p1["key_entry"].get()
+
+        # Pass 2
+        self.config.llm.scoring_model = self.scoring_model_var.get()
+        if self.scoring_model_var.get() == "local":
+            self.config.llm.model = self._p2["local_combo"].get()
+            self.config.llm.base_url = "http://localhost:11434/v1"
+            self.config.llm.api_key = ""
+            self.config.llm.openrouter_key = ""
+        else:
+            self.config.llm.model = self._p2["model_entry"].get()
+            self.config.llm.base_url = self._p2["url_combo"].get()
+            key = self._p2["key_entry"].get()
+            self.config.llm.api_key = key
+            self.config.llm.openrouter_key = key
+
+        self.config.llm.relevance_threshold = self.threshold_var.get()
+        self.config.llm.ncbi_api_key = self.ncbi_key_entry.get()

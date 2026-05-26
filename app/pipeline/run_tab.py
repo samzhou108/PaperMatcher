@@ -178,7 +178,7 @@ class RunTab:
 
     def _log(self, message: str, level: str = "info"):
         """Thread-safe: put message in queue; also print to terminal."""
-        print(f"[PaperPilot/{level.upper()}] {message}")
+        print(f"[PaperMatcher/{level.upper()}] {message}")
         self._log_queue.put((message, level))
 
     def _do_log(self, message: str, level: str = "info"):
@@ -242,7 +242,7 @@ class RunTab:
         self.log_text.delete("1.0", "end")
         self.log_text.configure(state="disabled")
 
-        self._log("Starting PaperPilot pipeline (PubMed scraper)...", "info")
+        self._log("Starting PaperMatcher pipeline (PubMed scraper)...", "info")
 
         self.pipeline_thread = threading.Thread(target=self._run_pipeline, daemon=True)
         self.pipeline_thread.start()

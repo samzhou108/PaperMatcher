@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-PaperPilot - macOS Desktop Application Entry Point
+PaperMatcher - macOS Desktop Application Entry Point
 Searches PubMed database, scores articles against research profile, and tracks results.
 """
 
@@ -18,8 +18,9 @@ from app.gui.app_window import AppWindow
 from app.gui.onboarding import OnboardingWizard
 
 
-APP_NAME = "PaperPilot"
-CONFIG_DIR = Path.home() / ".paperPilot"
+from app.version import __version__
+APP_NAME = "PaperMatcher"
+CONFIG_DIR = Path.home() / ".papermatcher"
 CONFIG_PATH = CONFIG_DIR / "config.json"
 
 

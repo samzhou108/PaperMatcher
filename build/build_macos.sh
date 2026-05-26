@@ -1,102 +1,95 @@
 #!/bin/bash
+# PaperPilot macOS build script.
+# Produces a .app bundle in dist/ using PyInstaller.
+# Do NOT use --onefile — CustomTkinter requires unpacked files to load themes.
+
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+DIST_DIR="$PROJECT_ROOT/dist"
+VENV_DIR="$PROJECT_ROOT/venv"
+
 echo "==================================="
-echo "PaperPilot macOS Build Script"
+echo "PaperPilot macOS Build"
+echo "Project root: $PROJECT_ROOT"
 echo "==================================="
 echo ""
 
-# Get script directory
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-BUILD_DIR="$SCRIPT_DIR"
-DIST_DIR="$PROJECT_ROOT/dist"
-
 cd "$PROJECT_ROOT"
 
-# Check for Python
-echo "Checking Python installation..."
-if ! command -v python3 &> /dev/null; then
-    echo "ERROR: python3 not found. Install Python 3.11+ from python.org"
-    exit 1
-fi
-
-PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-echo "Found Python $PYTHON_VERSION"
-
-# Create virtual environment if it doesn't exist
-VENV_DIR="$BUILD_DIR/venv"
+# Use the project's existing venv, or create one if it doesn't exist
 if [ ! -d "$VENV_DIR" ]; then
     echo "Creating virtual environment..."
     python3 -m venv "$VENV_DIR"
 fi
 
-# Activate virtual environment
 source "$VENV_DIR/bin/activate"
-
-# Install dependencies
-echo "Installing dependencies..."
-pip install --upgrade pip
-pip install -r "$PROJECT_ROOT/requirements.txt"
-
-# Install additional PyInstaller dependencies
-pip install pyinstaller
-
-# Create icon if it doesn't exist
-ICON_PATH="$PROJECT_ROOT/assets/icon.icns"
-if [ ! -f "$ICON_PATH" ]; then
-    echo "Note: No icon.icns found at $ICON_PATH"
-    echo "Using default PyInstaller icon. To use a custom icon:"
-    echo "  1. Create a 1024x1024 PNG icon"
-    echo "  2. Convert to .icns format"
-    echo "  3. Place at $ICON_PATH"
-    ICON_ARG=""
-else
-    ICON_ARG="--icon $ICON_PATH"
-fi
-
-# Build the application
+echo "Python: $(python3 --version)"
+echo "venv: $VENV_DIR"
 echo ""
+
+# Install / refresh dependencies
+echo "Installing dependencies..."
+pip install --upgrade pip --quiet
+pip install -r "$PROJECT_ROOT/requirements.txt" --quiet
+pip install pyinstaller --quiet
+echo "Dependencies installed."
+echo ""
+
+# Locate CustomTkinter package directory for bundling theme files
+CTK_DIR=$(python3 -c "import customtkinter, os; print(os.path.dirname(customtkinter.__file__))")
+echo "CustomTkinter: $CTK_DIR"
+
+# Optional app icon
+ICON_ARG=""
+ICON_PATH="$PROJECT_ROOT/assets/icon.icns"
+if [ -f "$ICON_PATH" ]; then
+    ICON_ARG="--icon $ICON_PATH"
+    echo "Icon: $ICON_PATH"
+else
+    echo "Note: no icon.icns found in assets/ — using default PyInstaller icon."
+    echo "To add one: create a 1024×1024 PNG, convert to .icns, save to assets/icon.icns"
+fi
+echo ""
+
+# Build
 echo "Building PaperPilot.app..."
 echo ""
 
 pyinstaller \
     --name "PaperPilot" \
     --windowed \
-    --onefile \
+    --noconfirm \
     $ICON_ARG \
     --add-data "$PROJECT_ROOT/assets:assets" \
+    --add-data "$CTK_DIR:customtkinter" \
     --hidden-import "customtkinter" \
+    --hidden-import "darkdetect" \
+    --hidden-import "packaging" \
     --hidden-import "pkg_resources" \
     --hidden-import "sqlite3" \
     --hidden-import "httpx" \
+    --hidden-import "httpx._transports.default" \
+    --hidden-import "openai" \
+    --hidden-import "dotenv" \
     --distpath "$DIST_DIR" \
-    --workpath "$BUILD_DIR/build" \
-    --specpath "$BUILD_DIR" \
+    --workpath "$SCRIPT_DIR/work" \
+    --specpath "$SCRIPT_DIR" \
     "$PROJECT_ROOT/main.py"
 
 echo ""
 echo "==================================="
-echo "Build Complete!"
+echo "Build complete!"
+echo "Output: $DIST_DIR/PaperPilot.app"
 echo "==================================="
 echo ""
-echo "Output: $DIST_DIR/PaperPilot"
+echo "Test with:"
+echo "  open $DIST_DIR/PaperPilot.app"
 echo ""
-echo "To run the app:"
-echo "  $DIST_DIR/PaperPilot"
+echo "To distribute:"
+echo "  cd $DIST_DIR && zip -r PaperPilot-macos.zip PaperPilot.app"
 echo ""
-echo "To create a .app bundle (macOS):"
-echo "  1. Build with --windowed flag creates PaperPilot.app in dist/"
-echo "  2. Or use the standalone binary at $DIST_DIR/PaperPilot"
-echo ""
-
-# Check if .app was created
-if [ -d "$DIST_DIR/PaperPilot.app" ]; then
-    echo ".app bundle created: $DIST_DIR/PaperPilot.app"
-    echo ""
-    echo "To install:"
-    echo "  cp -R '$DIST_DIR/PaperPilot.app' /Applications/"
-fi
-
-echo ""
-echo "Build completed successfully!"
+echo "First-launch note for recipients:"
+echo "  Right-click → Open (first time only, to bypass Gatekeeper)"
+echo "  Or: xattr -dr com.apple.quarantine PaperPilot.app"

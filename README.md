@@ -1,173 +1,276 @@
-PaperPilot — PubMed research article tracker for macOS.
+<div align="center">
 
-A customtkinter desktop app that searches PubMed for articles matching your research profile, scores them for relevance via a 2-pass LLM pipeline, and saves results locally.
+```
+  📄 ──── ❤️  ──── 📄
+     P A P E R
+   M A T C H E R
+  📄 ──── ✖️  ──── 📄
+```
+
+### *Like Tinder, but for journal articles*
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.11+-3776AB.svg?logo=python&logoColor=white)](https://python.org)
+[![Platform](https://img.shields.io/badge/Platform-macOS-000000.svg?logo=apple&logoColor=white)]()
+[![Built with Claude](https://img.shields.io/badge/Built%20with-Claude%20Sonnet-blueviolet.svg)](https://claude.ai)
+[![PubMed](https://img.shields.io/badge/Data-PubMed%20%2F%20NCBI-326599.svg)](https://pubmed.ncbi.nlm.nih.gov)
+
+**A free or low-cost, privacy-first literature triage tool for biomedical researchers.**
+
+</div>
 
 ---
 
-## How it works
+## The Problem
 
-1. Set up a research profile with keywords and fields of interest (onboarding)
-2. PubMed E-utilities is searched by keyword and/or monitored journals
-3. Pass 1: local Ollama model screens articles for topic relevance (fast filter)
-4. Pass 2: configurable model scores each article 1–10 against your profile
-5. Articles above your threshold are summarized and saved to SQLite
-6. Browse, edit, delete, and rate saved articles in the Results tab
-7. Thumbs-down ratings persist across runs — rejected articles are never re-surfaced
+The number of scientific publications being produced each year increases exponentially. Keeping track and staying up to date with the most relevant literature can be overwhelming. The current available tools leave much to be desired:
 
----
+- Email subscriptions, keyword alerts, and Journal RSS often give an adequate overview of the field, but also produce a lot of noise (most articles are tangentially related to your topic(s) of interest).
 
-## LLM configuration
+- PubMed searches often produce too many irrelevant results, or if the query is too specific they provide no results. Scanning every abstract manually for relevance to your research question takes a lot of time.
 
-Two-pass pipeline. Pass 1 always runs locally; Pass 2 is configurable.
+- Existing AI tools either cost money or send your data to remote servers, or both (e.g. Perplexity). Furthermore, most consumer AI tools only search for around 10–20 sources claimed to be "high-quality", which does not provide an adequate overview of the field and potentially misses relevant articles. You can chain more searches, but your token usage/credits will be depleted quickly.
 
-### Pass 1 — Screening (local)
-
-Filters out clearly irrelevant articles before the cloud model is called. Runs via Ollama.
-
-**Recommended:** `llama3.2:latest` (3B) — tested, fast (~0.3s/article). Note: 100% Pass 1 recall was measured on a single labeled test set and should not be taken as a general performance guarantee. See `tests/` and progress logs for details.
-
-Any Ollama model in the 3–8B range should work. Pass 1 only needs to answer YES/MAYBE/NO, so a larger model gives diminishing returns. Avoid very small models (<1B) — they tend to hallucinate labels.
-
-### Pass 2 — Scoring + summarization (configurable)
-
-Scores each article 1–10 and generates a summary. This is where model quality matters.
-
-The two tested cloud models (`baidu/qianfan-ocr-fast:free` and `inclusionai/ring-2.6-1t:free`) were selected because they are free on OpenRouter, do not train on prompts, and work reliably without the restrictive daily limits that affect many other free models. See `tests/EVAL_README.md` for full evaluation methodology and per-paper results.
-
-@t = relevance score threshold (articles below this score are discarded).
-
-| Pass 2 model | OpenRouter ID | Relevant recall | Irrelevant pass-through |
-|---|---|---|---|
-| `llama3.2:latest` (local) | — | 97.7% @t=6 | 67% |
-| Baidu/Qianfan OCR-Fast | `baidu/qianfan-ocr-fast:free` | 86.0% @t=4 | 33% |
-| InclusionAI Ring 2.6-1T | `inclusionai/ring-2.6-1t:free` | 74.4% @t=4 | 0% |
-
-Note: `llama3.2:latest` as Pass 2 has high recall but poor score discrimination — most articles cluster in a narrow range, making threshold tuning less reliable than with cloud models.
-
-**Production default:** `baidu/qianfan-ocr-fast:free` — best precision/recall tradeoff, zero irrelevant papers above threshold 4.
-
-**Local fallback:** `llama3.2:latest` both passes at threshold 6 — no API needed, but ~67% of irrelevant papers pass through.
-
-**Other options (not tested in this pipeline):**
-
-| Model | Where | Cost |
-|---|---|---|
-| `gemma2:9b`, `mistral:7b` | Ollama | Free |
-| `qwen3.5:9b` | Ollama/LM Studio | Free |
-| `gpt-4o-mini` | OpenAI API | ~$0.15/1M tok |
-| `claude-haiku-4` | Anthropic API | ~$0.25/1M tok |
-
-### Caveats
-
-**OpenRouter free tier:** Rate-limited to 50 requests/day — not sufficient for a typical pipeline run. To use cloud Pass 2 reliably, add at least $10 USD credit to your OpenRouter account (raises limit to 1000 requests/day). Otherwise use `llama3.2:latest` locally for both passes.
-
-**NCBI E-utilities (PubMed):** Without a registered API key, the rate limit is 3 requests/second. The app enforces this automatically with backoff on errors. A free NCBI API key raises the limit to 10 req/sec.
-
-**Local models and RAM:** On machines with <16GB RAM, running a 7B+ Ollama model alongside the GUI may cause slowdowns. `llama3.2:latest` (3B, ~2GB) is the safest default.
-
-### Recommended setup
-
-**With OpenRouter ($10 USD credit):**
-1. Install [Ollama](https://ollama.ai) and pull `llama3.2:latest`
-2. Create an [OpenRouter](https://openrouter.ai) account, add $10 USD credit, get an API key
-3. In Settings: Pass 1 = local, Pass 2 = cloud → enter OpenRouter key, model `baidu/qianfan-ocr-fast:free`, threshold 4
-
-**Fully local (free, no API):**
-
-1. Install Ollama:
-```bash
-brew install ollama
-```
-Or download the macOS app from [ollama.ai](https://ollama.ai) if you prefer a GUI installer.
-
-2. Start the Ollama server (runs in background):
-```bash
-ollama serve
-```
-
-3. Pull the model:
-```bash
-ollama pull llama3.2:latest
-```
-
-4. Verify it's available:
-```bash
-ollama list
-```
-You should see `llama3.2:latest` in the output.
-
-5. In PaperPilot Settings: Pass 1 = local, Pass 2 = local → model `llama3.2:latest`, threshold 6
-
-> Note: `ollama serve` needs to be running whenever you use the app. You can add it to your login items or just run it in a terminal tab before launching PaperPilot.
+PaperMatcher takes a different approach: it performs a well-crafted PubMed search, runs a fast relevance filter locally, then for scoring it either uses a larger local model or escalates to a cloud model only with user permission, and keeps data (your research questions and literature curation) stored on your machine as much as possible.
 
 ---
 
-## Key files
+## How It Works
 
 ```
-PubMedPaperPilot/
-├── main.py                        # Entry point
-├── app/
-│   ├── gui/
-│   │   ├── app_window.py          # Main window, tab layout
-│   │   ├── onboarding.py          # 3-step onboarding (Profile → PubMed → LLM)
-│   │   ├── profile_tab.py         # Research profile (name, role, keywords, fields)
-│   │   ├── results_tab.py         # Article card browser with edit/delete/feedback
-│   │   ├── run_tab.py             # Pipeline runner with live log, stats, stop button
-│   │   ├── settings_tab.py        # LLM config, Ollama installer, reset with confirmation
-│   │   └── widgets/
-│   │       ├── keyword_entry.py   # Autocomplete keyword entry
-│   │       └── scrollable_frame.py # Cross-platform scrollable frame
-│   ├── pipeline/
-│   │   ├── pubmed_scraper.py      # PubMed E-utilities search/scrape with retry
-│   │   ├── content_fetcher.py     # Article content fetcher (abstract merge)
-│   │   ├── relevance_scorer.py    # LLM scoring (1-10) with feedback injection
-│   │   └── summarizer.py          # LLM summarization
-│   ├── models/
-│   │   ├── config.py              # AppConfig dataclass
-│   │   ├── article.py             # Article dataclass
-│   │   └── user_profile.py        # User profile dataclass
-│   └── utils/
-│       ├── db.py                  # SQLite ArticleDatabase (dedup, feedback, rejection memory)
-│       ├── pubmed.py              # PubMed E-utilities client (fallback fetcher)
-│       └── llm_client.py          # OpenAI-compatible LLM client (2-pass support)
-├── build/
-│   └── build_macos.sh             # PyInstaller build script
-└── requirements.txt
+Your keywords + research profile
+        ↓
+PubMed search (NCBI E-utilities + MeSH expansion)
+        ↓
+Pass 1 — local LLM screens for topic relevance (~0.3s/article, free)
+        ↓
+Pass 2 — configurable model scores 1–10 against your profile
+        ↓
+Articles above threshold → structured analysis + tags
+        ↓
+Tinder-style review queue → keep / reject
+        ↓
+SQLite database on your machine
 ```
+
+**Pass 1** runs entirely locally via Ollama. It asks one question per article: *is the paper on-topic?* This process eliminates the majority of results before any cloud call is made.
+
+**Pass 2** runs on whichever model you configure. The model scores each surviving article on a scale of 1–10 against either your research question or research profile and generates a structured analysis: summary, implications, methodology, conflict-of-interest flag, reproducibility estimate, and tags.
+
+**Human in the loop review process:** The last step before saving the papers to your local database is a Tinder-like review interface, where you can read a summary, the abstract, and a relevance statement for each selected paper. You then make a decision to either accept or reject the paper. The decision is stored on your device for future searches with the same or similar keywords.
+
+Only articles that pass your review are saved.
 
 ---
 
-## How to run
+## Installation
+
+### Requirements
+
+- macOS (tested on Apple Silicon)
+- Python 3.11+
+- [Ollama](https://ollama.ai) with `llama3.2:latest` pulled
+- OpenRouter API key (optional — for cloud Pass 2)
+
+### Setup
 
 ```bash
-cd /path/to/PubMedPaperPilot
-python3 -m venv venv          # first time only
+git clone https://github.com/samzhou108/PaperMatcher
+cd PaperMatcher
+python3 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt  # first time only
+pip install -r requirements.txt
 python3 main.py
 ```
 
-First launch opens the 3-step onboarding screen. Subsequent launches go directly to the main window.
+First launch opens a 3-step onboarding screen (Profile → PubMed Settings → LLM). Subsequent launches go straight to the main window.
 
 ---
 
-## Notable design choices
+## Zero-Cost Setup
 
-- **2-pass pipeline** — Pass 1 (local, fast) filters out clearly irrelevant articles before the cloud model is called, reducing API cost
-- **Feedback loop** — thumbs-up/down ratings are injected into the Pass 2 scoring prompt on subsequent runs; rejected articles are permanently skipped via a `feedback_history` table that survives database resets
-- **Lookback up to 10 years** — slider displays days → months → years
-- **Boolean search** — OR-joined keywords wrapped in parentheses before AND-ing the date filter, matching PubMed operator precedence
-- **Rate limiting** — PubMed E-utilities calls are gated at 3 req/sec with exponential backoff on 429/5xx
+**Local (fully offline after setup):**
+
+1. Install [Ollama](https://ollama.ai) and pull `llama3.2:latest`
+2. Run PaperMatcher — no API key required
+
+**Cloud scoring (free tier, recommended):**
+
+1. Create a free [OpenRouter](https://openrouter.ai) account and generate an API key
+2. Enter the key in Settings → the free tier gives ~50 requests/day with `deepseek/deepseek-v4-flash:free`
+
+> **Rate limit note:** The free tier is throttled heavily — in practice you may hit the limit after fewer than 10 articles scored. Adding a \$10 USD credit to your OpenRouter account raises the daily limit to 1,000 requests with far less throttling. For typical runs of 20–50 articles, even with paid models, \$10 lasts a very long time.
 
 ---
 
-## Built with
+## LLM Configuration
 
-| Tool | Role |
-|---|---|
-| [Kimi K2.6](https://platform.kimi.ai) | Initial codebase — single agent built the full app in one run |
-| [Claude Sonnet 4.6](https://claude.ai) (Anthropic Cowork) | Architecture, planning, debugging, prompt design |
-| [Perplexity AI](https://perplexity.ai) | Literature research, feature validation |
-| [InclusionAI — Ring 2.6-1T](https://openrouter.ai) | Coding/debugging via Hermes agent |
-| [Baidu Qianfan — OCR-Fast](https://openrouter.ai) | Pass 2 scoring model (production default) |
+### Pass 1 — Screening (local, always free)
+
+| Model             | Size        | Notes                                                                        |
+| ----------------- | ----------- | ---------------------------------------------------------------------------- |
+| `llama3.2:latest` | 3B / 2.0 GB | **Recommended.** 100% recall on 92-paper benchmark at ~0.3s/paper.          |
+| `gemma3:4b`       | 4B / 3.3 GB | 93% recall — usable but misses more papers than llama3.2.                   |
+| `mistral:7b`      | 7B / 4.4 GB | 100% recall but 6× slower than llama3.2 with no benefit for a yes/no task.  |
+| `llama3.1:8b`     | 8B / 4.9 GB | 100% recall but 6× slower than llama3.2 with no benefit for a yes/no task.  |
+
+Models above ~5 GB are not recommended — they slow screening significantly on consumer hardware. No model tested improved on `llama3.2:latest` for this task.
+
+### Pass 2 — Scoring + Summarization (configurable)
+
+#### Online
+
+**Best free option:**
+
+| Model                             | Notes                                                                                      |
+| --------------------------------- | ------------------------------------------------------------------------------------------ |
+| `deepseek/deepseek-v4-flash:free` | No prompt training required, but no "Zero Data Retention" (ZDR) policy. Fast, 1M context. |
+
+No training on prompt data can be enabled in OpenRouter > Guardrails > Model & Provider Access
+
+**Other free options** (require enabling prompt training: OpenRouter → Settings → Privacy → Allow prompt training):
+
+| Model                                                | Notes                                     |
+| ---------------------------------------------------- | ----------------------------------------- |
+| `openrouter/owl-alpha:free`                          | Requires prompt training consent, no ZDR. |
+| `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free` | Requires prompt training consent, no ZDR. |
+
+**Paid options (no daily limit, no prompt training, and ZDR):**
+
+| Model                        | Input / Output per 1M tokens (USD) |
+| ---------------------------- | ---------------------------------- |
+| `deepseek/deepseek-v4-flash` | \$0.126 / \$0.252                  |
+| `deepseek/deepseek-v4-pro`   | \$0.435 / \$0.87                   |
+
+> Free model availability changes frequently. Table current as of May 2026.
+
+#### Local
+
+Set API Base URL to `http://localhost:11434` and enter any Ollama model name. No API key, no rate limit, fully offline.
+
+| Model             | Size        | Threshold | E2E   | Irr pass-through | Notes                                      |
+| ----------------- | ----------- | --------- | ----- | ---------------- | ------------------------------------------ |
+| `llama3.2:latest` | 3B / 2.0 GB | t=6       | 98%   | 67%              | **Best local recall.** High noise to review. |
+| `granite3.3:8b`   | 8B / 4.9 GB | t=3       | 88%   | 33%              | Best local precision. Matches cloud noise level, 3× slower. Pull: `ollama pull granite3.3:8b` |
+| `gemma3:4b`       | 4B / 3.3 GB | t=6       | 91%   | 67%              | Fast, but no advantage over llama3.2 locally. |
+
+---
+
+## Features
+
+**Search & query**
+
+- MeSH term expansion via NCBI E-utilities — keywords automatically mapped to canonical medical subject headings
+- ✨ **LLM query generation** — describe your search focus in plain language; an LLM constructs a structured PubMed query with correct Boolean logic and MeSH terms. Uses your cloud model when configured, falls back to local llama3.2
+- **Query validation** — warnings shown in the preview when the generated query has patterns likely to return zero results (too many AND conditions, long literal phrases)
+- **Auto-broadening** — if a query returns zero results, AND constraints are automatically relaxed one at a time until results are found
+- Advanced search panel — Must Include (`AND [Title/Abstract]`), Include to Expand (OR block), Do Not Include terms
+- Publication type filter — Review, Original Research, Clinical Trial, Meta-Analysis, Systematic Review
+- Configurable lookback period — entry + slider with piecewise scale (days/weeks → months → years up to 20)
+
+**Pipeline**
+
+- Two-pass LLM scoring with configurable threshold
+- Feedback injection — past accepted/rejected article context is injected into the Pass 2 scoring prompt on subsequent runs
+- Topic-scoped rejection memory — articles you reject are stored with the search keywords active at rejection time. A rejected article is only skipped in future runs if the new search has substantial keyword overlap with the original rejection context.
+
+**Review popup**
+
+- One article at a time, after each pipeline run
+- Shows: summary, abstract with keyword highlights, why it's relevant, implications, methodology, reproducibility score (1–5), conflict-of-interest flag
+- **Keep** — article saved to your database
+- **Reject** — article deleted from database immediately; stored with search context for future filtering
+- **Skip** — article kept, no feedback recorded
+- Keyboard shortcuts: `→` keep, `←` reject, `↓` skip
+
+**Results tab**
+
+- Compact list — title, author(s), journal, year, score
+- Click any row to expand: full summary, implications, methodology, reproducibility, relevance reason, tags, action buttons
+- Edit, delete, copy, export CSV
+
+**Settings**
+
+- Pass 2 model dropdown auto-detects installed Ollama models and shows cloud presets based on your API URL
+- 💡 Suggested Setup guide — Ollama model recommendations, OpenRouter setup steps, rate limit explanation
+- Ollama model installer — download curated models directly from the app
+
+**Profile**
+
+- Research profile (role, keywords, fields of interest) personalises Pass 2 scoring
+- MeSH cache manager — view and delete cached NCBI term lookups
+
+---
+
+## Design Decisions
+
+**Why a two-pass pipeline?**
+A 3B local model answering yes/no costs nothing and runs in ~0.3 seconds per article. It removes 60–80% of results before any API call is made, which matters on overall speed and saving costs (either RAM or \$) for the Pass 2 model.
+
+**Why local-first?**
+Researchers working on sensitive or unpublished work shouldn't need to send their research interests to a third-party server. Pass 1 is always local. Pass 2 cloud calls are opt-in. The full pipeline works offline with Ollama for both passes.
+
+**Topic-scoped rejection instead of global blacklist**
+A paper irrelevant to your research may be directly relevant to a different project. Rejection is stored with the search keywords that were active when you rejected it. Future runs only skip the paper if there's meaningful keyword overlap — otherwise it's treated as new.
+
+**Auto-broadening instead of failing on zero results**
+LLMs building PubMed queries sometimes over-constrain with too many AND conditions. Rather than returning nothing, the scraper strips AND clauses one at a time until results appear, then logs how many constraints were dropped.
+
+**Why SQLite?**
+No server, no setup. `~/.papermatcher/papermatcher.db` is a single file you can back up, inspect with any SQLite browser, or delete to start fresh.
+
+**Benchmark results (92-paper test set, 7 Pass 1 and 5 Pass 2 models evaluated):**
+
+| Config | Threshold | E2E Recall | Irr. pass-through | Time |
+| ------ | --------- | ---------- | ----------------- | ---- |
+| llama3.2 P1 + **DeepSeek P2** (cloud) | t=4 | 86% | 33% | ~4.4 min |
+| **llama3.2 both** (local) | t=6 | **98%** | 67% | ~5.4 min |
+| llama3.2 P1 + granite3.3:8b P2 (local) | t=3 | 88% | 33% | ~15 min |
+
+All configs use `llama3.2:latest` for Pass 1 (100% recall on this dataset, ~0.3s/paper). No other local model improved on it — larger models matched recall but were 6× slower.
+
+**Cloud is the recommended default** — best balance of speed and precision. **llama3.2 both at t=6** is the best fully-offline option with the highest recall of any config tested. See `tests/EVAL_README.md` for full methodology and per-threshold breakdown.
+
+---
+
+## What PaperMatcher Stores
+
+Everything in `~/.papermatcher/` — nothing leaves your machine except the Pass 2 API calls you configure.
+
+| File                 | Contents                                    |
+| -------------------- | ------------------------------------------- |
+| `config.json`        | Settings and research profile               |
+| `papermatcher.db`    | Saved articles, rejection history, run logs |
+| `mesh_cache.json`    | Cached NCBI MeSH term lookups               |
+
+No telemetry. Pass 1 screening is always local.
+
+---
+
+## Acknowledgements
+
+Summarization prompt structure adapted from [Fabric](https://github.com/danielmiessler/fabric) by Daniel Miessler (MIT License) — specifically `analyze_paper_simple` and `create_tags`.
+
+---
+
+## Built With
+
+| Tool                                                          | Role                                                              |
+| ------------------------------------------------------------- | ----------------------------------------------------------------- |
+| [Kimi K2.6](https://platform.kimi.ai)                         | Initial codebase — single agent built the full app in one session |
+| [Claude Sonnet 4.6](https://claude.ai)                        | Architecture, iteration, debugging, prompt design                 |
+| [Hermes](https://github.com/InclusionAI/hermes) (InclusionAI) | Implementation agent for Python edits                             |
+| [DeepSeek V4 Flash](https://openrouter.ai)                    | Default Pass 2 scoring model                                      |
+| [Perplexity AI](https://perplexity.ai)                        | Research and feature validation                                   |
+
+---
+
+## Roadmap
+
+- [ ] Citation export (RIS, BibTeX, NBIB, ENW)
+- [ ] Journal RSS feed monitoring (ahead-of-print / early access)
+- [ ] Iterative profile enhancement from saved articles
+- [ ] Sorting of curated literature by keyword tags
+- [ ] Embedding-based Pass 1 screening for large result sets (100K+)
+- [ ] Fine-tuning on accumulated user feedback (LoRA/QLoRA)
+- [ ] Windows / Linux support

@@ -1,5 +1,6 @@
 """SQLite database for tracking processed articles (deduplication)."""
 
+import json
 import sqlite3
 import threading
 from pathlib import Path
@@ -7,8 +8,14 @@ from datetime import datetime
 from typing import List, Optional, Dict, Any
 
 
-DB_DIR = Path.home() / ".paperPilot"
-DB_PATH = DB_DIR / "paperpilot.db"
+DB_DIR = Path.home() / ".papermatcher"
+DB_PATH = DB_DIR / "papermatcher.db"
+
+# Migrate data from old ~/.paperpilot directory if present
+_old_dir = Path.home() / ".paperpilot"
+if _old_dir.exists() and not DB_DIR.exists():
+    import shutil
+    shutil.copytree(str(_old_dir), str(DB_DIR))
 
 
 class ArticleDatabase:
@@ -103,8 +110,8 @@ class ArticleDatabase:
             CREATE INDEX IF NOT EXISTS idx_pmid ON processed_articles(pmid)
         """)
 
-        # Feedback history: persists feedback for deleted articles so rejected
-        # papers are never re-added across pipeline runs.
+        # Feedback history: persists rejected articles with search context so
+        # rejection is topic-scoped rather than global.
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS feedback_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -112,9 +119,18 @@ class ArticleDatabase:
                 pmid TEXT,
                 title TEXT,
                 feedback TEXT NOT NULL,
-                deleted_at TEXT NOT NULL
+                deleted_at TEXT NOT NULL,
+                search_or_keywords TEXT,
+                search_and_keywords TEXT
             )
         """)
+        # Migrate existing databases that don't have the keyword columns yet
+        for col, default in [("search_or_keywords", "NULL"), ("search_and_keywords", "NULL")]:
+            try:
+                cursor.execute(f"ALTER TABLE feedback_history ADD COLUMN {col} TEXT DEFAULT {default}")
+                conn.commit()
+            except Exception:
+                pass  # column already exists
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_fh_doi ON feedback_history(doi)
         """)
@@ -146,8 +162,8 @@ class ArticleDatabase:
 
         return False
 
-    def mark_processed(self, article_data: Dict[str, Any]):
-        """Mark an article as processed."""
+    def mark_processed(self, article_data: Dict[str, Any]) -> int:
+        """Mark an article as processed and return its database ID."""
         conn = self._get_conn()
         cursor = conn.cursor()
 
@@ -176,7 +192,9 @@ class ArticleDatabase:
             datetime.now().isoformat(),
         ))
 
+        # Return the inserted ID
         conn.commit()
+        return cursor.lastrowid
 
     def update_article(self, article_id: int, **kwargs):
         """Update specific fields of a saved article by ID."""
@@ -225,27 +243,87 @@ class ArticleDatabase:
         row = cursor.fetchone()
         return row[0] if row and row[0] else None
 
-    def is_rejected(self, doi: str = "", pmid: str = "") -> bool:
-        """Return True if this article was previously deleted with 'not_relevant' feedback.
+    def reject_article(self, article_id: int,
+                       or_keywords: Optional[List[str]] = None,
+                       and_keywords: Optional[List[str]] = None):
+        """Reject an article: log to feedback_history with search context, then delete.
 
-        Used by the pipeline to permanently skip user-rejected articles.
+        or_keywords: broad OR-block keywords active at rejection time (soft-match context).
+        and_keywords: AND/must-include keywords active at rejection time (hard-match context).
         """
         conn = self._get_conn()
         cursor = conn.cursor()
+        cursor.execute(
+            "SELECT doi, pmid, title FROM processed_articles WHERE id = ?", (article_id,)
+        )
+        row = cursor.fetchone()
+        if row:
+            doi, pmid, title = row
+            cursor.execute("""
+                INSERT INTO feedback_history
+                    (doi, pmid, title, feedback, deleted_at, search_or_keywords, search_and_keywords)
+                VALUES (?, ?, ?, 'not_relevant', ?, ?, ?)
+            """, (
+                doi or "", pmid or "", title or "",
+                datetime.now().isoformat(),
+                json.dumps([k.lower().strip() for k in (or_keywords or [])]),
+                json.dumps([k.lower().strip() for k in (and_keywords or [])]),
+            ))
+        cursor.execute("DELETE FROM processed_articles WHERE id = ?", (article_id,))
+        conn.commit()
+
+    def is_rejected(self, doi: str = "", pmid: str = "",
+                    or_keywords: Optional[List[str]] = None,
+                    and_keywords: Optional[List[str]] = None) -> bool:
+        """Topic-scoped rejection check.
+
+        Returns True only if this article was rejected in a similar search context:
+        - Hard match: any current AND/must-include keyword matches stored AND keywords.
+        - Soft match: ≥40% overlap between current OR keywords and stored OR keywords.
+        - Legacy (no keywords provided): global match for backwards compatibility.
+        """
+        conn = self._get_conn()
+        cursor = conn.cursor()
+
+        records = []
         if doi:
             cursor.execute(
-                "SELECT 1 FROM feedback_history WHERE doi = ? AND feedback = 'not_relevant'",
-                (doi,),
+                "SELECT search_or_keywords, search_and_keywords FROM feedback_history "
+                "WHERE doi = ? AND feedback = 'not_relevant'", (doi,)
             )
-            if cursor.fetchone():
-                return True
-        if pmid:
+            records.extend(cursor.fetchall())
+        if pmid and not records:
             cursor.execute(
-                "SELECT 1 FROM feedback_history WHERE pmid = ? AND feedback = 'not_relevant'",
-                (pmid,),
+                "SELECT search_or_keywords, search_and_keywords FROM feedback_history "
+                "WHERE pmid = ? AND feedback = 'not_relevant'", (pmid,)
             )
-            if cursor.fetchone():
+            records.extend(cursor.fetchall())
+
+        if not records:
+            return False
+
+        # Legacy behaviour: no context provided → global rejection
+        if not or_keywords and not and_keywords:
+            return True
+
+        current_or = {k.lower().strip() for k in (or_keywords or [])}
+        current_and = {k.lower().strip() for k in (and_keywords or [])}
+
+        for stored_or_json, stored_and_json in records:
+            stored_or = set(json.loads(stored_or_json or "[]"))
+            stored_and = set(json.loads(stored_and_json or "[]"))
+
+            # Hard match: any AND keyword in common → same topic context
+            if current_and and stored_and and (current_and & stored_and):
                 return True
+
+            # Soft match: ≥40% overlap of OR keywords
+            if current_or and stored_or:
+                overlap = len(current_or & stored_or)
+                smaller = min(len(current_or), len(stored_or))
+                if smaller > 0 and (overlap / smaller) >= 0.4:
+                    return True
+
         return False
 
     def get_feedback_history(self, limit: int = 10, feedback: str = "relevant") -> list[dict]:
@@ -348,6 +426,33 @@ class ArticleDatabase:
         columns = ["id", "doi", "pmid", "title", "journal", "authors", "url", "abstract",
                    "relevance_score", "relevance_reason", "summary", "tags", "include", "feedback", "processed_at"]
         return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+    def get_seen_ids(self) -> tuple[set[str], set[str]]:
+        """Return (pmids, dois) for all processed and rejected articles.
+
+        Used to pre-filter PubMed search results before fetching abstracts,
+        so already-seen articles don't consume slots in max_results.
+        """
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        pmids: set[str] = set()
+        dois:  set[str] = set()
+
+        cursor.execute("SELECT pmid, doi FROM processed_articles WHERE pmid != '' OR doi != ''")
+        for pmid, doi in cursor.fetchall():
+            if pmid:
+                pmids.add(pmid)
+            if doi:
+                dois.add(doi)
+
+        cursor.execute("SELECT pmid, doi FROM feedback_history WHERE pmid != '' OR doi != ''")
+        for pmid, doi in cursor.fetchall():
+            if pmid:
+                pmids.add(pmid)
+            if doi:
+                dois.add(doi)
+
+        return pmids, dois
 
     def close(self):
         """Close database connection."""

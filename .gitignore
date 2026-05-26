@@ -23,8 +23,9 @@ paperpilot.db.bak
 .env
 *.env
 
-# Eval outputs (contain labeled paper data)
+# Eval outputs (contain labeled paper data — raw files excluded)
 tests/*.csv
+!tests/eval_results_sanitized.csv
 
 # Internal notes
 progress_tracking/

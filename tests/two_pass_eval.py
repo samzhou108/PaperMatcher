@@ -13,6 +13,14 @@ Usage:
     python3 tests/two_pass_eval.py --config local-llama3.2_online-Ring
     python3 tests/two_pass_eval.py --config local-llama3.2_online-OCRFast
 
+    # Pass 1 only — screen papers, save pass1_<tag>.csv, skip Pass 2
+    python3 tests/two_pass_eval.py --config local-qwen3.5_p1only --pass1-only
+    python3 tests/two_pass_eval.py --config local-mistral7b_p1only --pass1-only
+    python3 tests/two_pass_eval.py --config local-llama3.1_p1only --pass1-only
+
+    # Pass 2 only — reuse an existing pass1 CSV, run only Pass 2
+    python3 tests/two_pass_eval.py --config local-llama3.2_both --reuse-pass1 tests/pass1_local-llama3.2_both.csv
+
     # Run all configs in sequence (not recommended — RAM thermal risk)
     python3 tests/two_pass_eval.py --all
 
@@ -22,9 +30,9 @@ Requires:
     - labeled_papers.csv in tests/ (auto-generated from EndNote XML if not present)
 
 Output per run:
-    tests/pass1_<tag>.csv
-    tests/pass2_<tag>.csv
-    tests/comparison_summary.csv  (appended after each run, includes total_time_s)
+    tests/pass1_<tag>.csv          (skipped when --reuse-pass1 is used)
+    tests/pass2_<tag>.csv          (skipped when --pass1-only is used)
+    tests/comparison_summary.csv   (appended after each run, includes total_time_s)
 """
 
 import os
@@ -48,6 +56,20 @@ OLLAMA_BASE     = "http://localhost:11434/v1/chat/completions"
 
 SCORE_THRESHOLD = 6
 
+# Early-stop thresholds for Pass 1
+SMOKE_N           = 10    # papers for Pass 1 --smoke mode
+UNCLEAR_BAIL      = 3     # consecutive UNCLEAR responses → bail (model is looping)
+SLOW_THRESHOLD_S  = 15.0  # seconds per call to count as "slow"
+SLOW_BAIL         = 3     # consecutive slow calls → bail (model is stuck)
+
+# Pass 2 smoke — balanced label selection
+SMOKE_P2 = {"relevant": 2, "borderline": 1, "irrelevant": 2}  # 5 papers total
+
+# Thermal monitoring (Apple Silicon via powermetrics)
+THERMAL_CHECK_EVERY = 10   # check every N papers
+THERMAL_WARN_W      = 25.0  # warn above this CPU power draw (watts)
+THERMAL_PAUSE_W     = 35.0  # auto-pause above this (throttling likely imminent)
+
 # Langfuse (optional) — set env vars or leave blank to disable
 LANGFUSE_HOST       = os.environ.get("LANGFUSE_HOST", "http://localhost:3030")
 LANGFUSE_PUBLIC_KEY = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
@@ -57,17 +79,81 @@ LANGFUSE_ENABLED    = bool(LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY)
 # Available configs: (pass1_model, pass1_local, pass2_model, pass2_local, tag)
 # Sleep is applied only between online calls — local calls have no sleep.
 CONFIGS = {
+    # ── Original benchmark configs ────────────────────────────────────────────
     "local-llama3.2_both": (
         "llama3.2:latest", True,
         "llama3.2:latest", True,
     ),
     "local-llama3.2_online-Ring": (
-        "llama3.2:latest",             True,
+        "llama3.2:latest",              True,
         "inclusionai/ring-2.6-1t:free", False,
     ),
     "local-llama3.2_online-OCRFast": (
-        "llama3.2:latest",              True,
-        "baidu/Qianfan-OCR-Fast:free",  False,
+        "llama3.2:latest",             True,
+        "baidu/Qianfan-OCR-Fast:free", False,
+    ),
+    # ── Pass 1 candidates — use --pass1-only ─────────────────────────────────
+    # Already installed — test these first, no downloads needed
+    "p1-qwen3.5-0.8b": (          # 1.0 GB — fastest, test first
+        "qwen3.5:0.8b", True,
+        "llama3.2:latest", True,
+    ),
+    "p1-qwen3.5-4b": (            # 3.4 GB — mid-size Qwen
+        "qwen3.5:4b", True,
+        "llama3.2:latest", True,
+    ),
+    "p1-gemma3-4b": (             # 3.3 GB — strong instruction following
+        "gemma3:4b", True,
+        "llama3.2:latest", True,
+    ),
+    "p1-phi4-mini-reasoning": (   # 3.2 GB — reasoning variant already installed
+        "phi4-mini-reasoning:3.8b", True,
+        "llama3.2:latest", True,
+    ),
+    "p1-nemotron-nano-4b": (      # 2.8 GB — NVIDIA nano
+        "nemotron-3-nano:4b", True,
+        "llama3.2:latest", True,
+    ),
+    "p1-mistral7b": (             # 4.4 GB — ⚠ caused overheating in previous run; take breaks
+        "mistral:7b", True,
+        "llama3.2:latest", True,
+    ),
+    "p1-llama3.1-8b": (           # 4.9 GB — largest local P1 candidate
+        "llama3.1:8b", True,
+        "llama3.2:latest", True,
+    ),
+    # Needs download — pull with: ollama pull granite3.3:2b
+    "p1-granite3.3-2b": (         # 1.5 GB — IBM, explicitly strong at classification
+        "granite3.3:2b", True,
+        "llama3.2:latest", True,
+    ),
+    # ── Pass 2 candidates — use --reuse-pass1 ────────────────────────────────
+    # Already installed
+    "p2-qwen3.5-4b": (            # 3.4 GB — best local P2 bet (strong reasoning)
+        "llama3.2:latest", True,
+        "qwen3.5:4b", True,
+    ),
+    "p2-mistral7b": (             # 4.4 GB
+        "llama3.2:latest", True,
+        "mistral:7b", True,
+    ),
+    "p2-llama3.1-8b": (           # 4.9 GB — biggest installed
+        "llama3.2:latest", True,
+        "llama3.1:8b", True,
+    ),
+    "p2-gemma3-4b": (             # 3.3 GB
+        "llama3.2:latest", True,
+        "gemma3:4b", True,
+    ),
+    # Needs download — pull with: ollama pull granite3.3:8b
+    "p2-granite3.3-8b": (         # 4.9 GB — IBM, strong at classification/summarization
+        "llama3.2:latest", True,
+        "granite3.3:8b", True,
+    ),
+    # Needs download — pull with: ollama pull qwen3.5:9b  (~6.6 GB, needs ~10 GB free RAM)
+    "p2-qwen3.5-9b": (
+        "llama3.2:latest", True,
+        "qwen3.5:9b", True,
     ),
 }
 
@@ -232,7 +318,7 @@ def call_llm(model: str, system: str, user: str, max_tokens: int,
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type":  "application/json",
-        "HTTP-Referer":  "https://github.com/pubmedpaperpilot",
+        "HTTP-Referer":  "https://github.com/samzhou108/PaperMatcher",
     }
 
     for attempt in range(retries):
@@ -331,15 +417,152 @@ def mean_sd(vals):
     return m, sd
 
 
+def _p1_group(rows, lbl):
+    grp    = [r for r in rows if r["label"] == lbl]
+    passed = [r for r in grp if r["passes"]]
+    missed = [r for r in grp if not r["passes"]]
+    return len(passed), len(grp), missed
+
+
+def _print_p1_summary(rows, total_time, relevant_total):
+    rel_p, rel_t, rel_missed = _p1_group(rows, "relevant")
+    brd_p, brd_t, _           = _p1_group(rows, "borderline")
+    irr_p, irr_t, _           = _p1_group(rows, "irrelevant")
+    unclear_n = sum(1 for r in rows if r["pass1_decision"].startswith("UNCLEAR"))
+    print(f"\n── Pass 1 results ({len(rows)} papers, LLM time: {total_time:.1f}s) ──")
+    if rel_t:
+        print(f"  Recall (relevant):         {rel_p}/{rel_t} = {rel_p/rel_t*100:.1f}%  [target ≥95%]")
+    if brd_t:
+        print(f"  Pass-through (borderline): {brd_p}/{brd_t} = {brd_p/brd_t*100:.1f}%")
+    if irr_t:
+        print(f"  FP rate (irrelevant):      {irr_p}/{irr_t} = {irr_p/irr_t*100:.1f}%")
+    if unclear_n:
+        print(f"  ⚠ UNCLEAR responses:       {unclear_n} (model did not follow format)")
+    if rel_missed:
+        print(f"  False negatives:")
+        for r in rel_missed:
+            print(f"    ✗ {r['title'][:75]}")
+
+
+def _p1_only_summary(tag, p1_display, p1_total_time, rows, relevant_total,
+                     trace_id, stopped=""):
+    rel_p, rel_t, rel_missed = _p1_group(rows, "relevant")
+    brd_p, brd_t, _           = _p1_group(rows, "borderline")
+    irr_p, irr_t, _           = _p1_group(rows, "irrelevant")
+    return {
+        "tag": tag, "p1_model": p1_display, "p2_model": "(skipped)",
+        "p1_recall":        round(rel_p / rel_t, 4) if rel_t else 0,
+        "p1_fns":           len(rel_missed),
+        "p1_borderline_pt": round(brd_p / brd_t, 4) if brd_t else 0,
+        "p1_irr_fp":        round(irr_p / irr_t, 4) if irr_t else 0,
+        "p2_rel_mean": 0, "p2_rel_sd": 0, "p2_brd_mean": 0, "p2_irr_mean": 0,
+        "e2e_recall": 0,
+        "p1_time_s":    round(p1_total_time, 1),
+        "p2_time_s":    0,
+        "total_time_s": round(p1_total_time, 1),
+        "stopped":      stopped,
+        "langfuse_trace": trace_id if LANGFUSE_ENABLED else "",
+    }
+
+
+# ── Thermal monitoring ───────────────────────────────────────────────────────
+
+def _read_thermal() -> tuple[float, bool]:
+    """
+    Sample CPU power draw and throttle state via powermetrics.
+    Returns (cpu_watts, is_throttling).
+    Requires sudo — silently returns (0.0, False) if unavailable.
+    """
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["sudo", "-n", "powermetrics", "--samplers", "cpu_power", "-n", "1"],
+            capture_output=True, text=True, timeout=8,
+        )
+        watts      = 0.0
+        throttling = False
+        for line in result.stdout.splitlines():
+            line_l = line.lower()
+            if "cpu power" in line_l and "w" in line_l:
+                # e.g. "CPU Power: 5.13W"
+                for token in line.split():
+                    token = token.rstrip("W").rstrip("w")
+                    try:
+                        watts = float(token)
+                        break
+                    except ValueError:
+                        continue
+            if "throttle: yes" in line_l:
+                throttling = True
+        return watts, throttling
+    except Exception:
+        return 0.0, False
+
+
+def thermal_check(paper_idx: int) -> None:
+    """Print a thermal warning if CPU power is high. Pause if very hot."""
+    if paper_idx % THERMAL_CHECK_EVERY != 0:
+        return
+    watts, throttling = _read_thermal()
+    if watts == 0.0:
+        return  # powermetrics unavailable (no sudo -n access) — skip silently
+    if throttling:
+        print(f"\n  🌡 THROTTLING DETECTED ({watts:.1f}W) — pausing 60s to cool down ...")
+        time.sleep(60)
+    elif watts >= THERMAL_PAUSE_W:
+        print(f"\n  🌡 Very hot ({watts:.1f}W) — pausing 30s ...")
+        time.sleep(30)
+    elif watts >= THERMAL_WARN_W:
+        print(f"\n  🌡 Warm ({watts:.1f}W) — consider a break after this paper")
+
+
+def _select_smoke_p2_papers(papers: list) -> list:
+    """Pick a balanced subset for a Pass 2 smoke test.
+
+    Picks directly from the full labeled set regardless of P1 decisions,
+    so label diversity is guaranteed even if irrelevant papers were filtered.
+    Returns list of (paper_dict, fake_pass1_row) tuples ready for P2 scoring.
+    """
+    by_label: dict[str, list] = {"relevant": [], "borderline": [], "irrelevant": []}
+    for p in papers:
+        lbl = p.get("label", "")
+        if lbl in by_label:
+            by_label[lbl].append(p)
+
+    selected = []
+    for lbl, count in SMOKE_P2.items():
+        pool = by_label[lbl]
+        chosen = pool[:count]
+        for p in chosen:
+            fake_r1 = {
+                "title": p["title"][:80], "label": lbl,
+                "pass1_decision": "SMOKE", "passes": True, "elapsed_s": 0.0,
+            }
+            selected.append((p, fake_r1))
+
+    total = sum(SMOKE_P2.values())
+    labels = ", ".join(f"{c}×{l}" for l, c in SMOKE_P2.items() if c)
+    print(f"\n  [P2 smoke] Selected {len(selected)}/{total} papers ({labels})")
+    if len(selected) < total:
+        print(f"  [P2 smoke] ⚠ Some labels had fewer papers than requested")
+    return selected
+
+
 # ── Single config eval ────────────────────────────────────────────────────────
 
 def run_single_eval(papers: list, tag: str,
                      p1_model: str, p1_local: bool,
-                     p2_model: str, p2_local: bool) -> dict:
+                     p2_model: str, p2_local: bool,
+                     pass1_only: bool = False,
+                     reuse_pass1_csv: str = "",
+                     smoke: bool = False) -> dict:
     """
     Run full 2-pass eval for one config.
     Sleep is only applied after online (non-local) calls to respect rate limits.
-    Returns summary dict.
+    pass1_only: run Pass 1 only, skip Pass 2.
+    reuse_pass1_csv: path to an existing pass1_<tag>.csv — skip Pass 1, run Pass 2 only.
+    smoke: run only the first SMOKE_N papers as a quick sanity check, then exit.
+    Returns summary dict (None fields if stopped early / smoke mode).
     """
     ONLINE_SLEEP = 2.0   # seconds between online calls
     relevant_total = sum(1 for p in papers if p["label"] == "relevant")
@@ -369,55 +592,118 @@ def run_single_eval(papers: list, tag: str,
     print(f"{'#'*65}")
 
     # ── Pass 1 ────────────────────────────────────────────────────────────────
-    print(f"\nPass 1 — screening {len(papers)} papers ...")
-    pass1_rows   = []
+    pass1_rows    = []
     p1_total_time = 0.0
 
-    for i, p in enumerate(papers):
-        decision, elapsed = pass1_screen(p["title"], p["abstract"],
-                                          p1_model, p1_local, trace_id)
-        p1_total_time += elapsed
-        passes = decision in ("YES", "MAYBE")
-        pass1_rows.append({
-            "title":          p["title"][:80],
-            "label":          p["label"],
-            "pass1_decision": decision,
-            "passes":         passes,
-            "elapsed_s":      round(elapsed, 2),
-        })
-        status = "✓" if passes else "✗"
-        print(f"  [{i+1:3d}/{len(papers)}] {status} {decision:8s}  [{p['label']:10s}]  "
-              f"{elapsed:5.1f}s  {p['title'][:50]}")
-        if not p1_local:
-            time.sleep(ONLINE_SLEEP)
+    if reuse_pass1_csv:
+        # Load pre-computed Pass 1 decisions — skip running Pass 1
+        print(f"\nPass 1 — loading saved decisions from {reuse_pass1_csv} ...")
+        with open(reuse_pass1_csv, newline="", encoding="utf-8") as f:
+            saved = list(csv.DictReader(f))
+        saved_by_title = {r["title"]: r for r in saved}
+        for p in papers:
+            short = p["title"][:80]
+            r = saved_by_title.get(short, {})
+            decision = r.get("pass1_decision", "YES")   # default pass if not in CSV
+            passes   = decision in ("YES", "MAYBE")
+            p1_total_time += float(r.get("elapsed_s", 0))
+            pass1_rows.append({
+                "title":          short,
+                "label":          p["label"],
+                "pass1_decision": decision,
+                "passes":         passes,
+                "elapsed_s":      float(r.get("elapsed_s", 0)),
+            })
+        print(f"  Loaded {len(pass1_rows)} decisions ({sum(1 for r in pass1_rows if r['passes'])} pass).")
+    else:
+        run_papers = papers[:SMOKE_N] if smoke else papers
+        mode_label = f"SMOKE ({SMOKE_N} papers)" if smoke else f"{len(papers)} papers"
+        print(f"\nPass 1 — screening {mode_label} with {p1_model} ...")
+        if not smoke:
+            print(f"  Auto-stop triggers: {UNCLEAR_BAIL} consecutive UNCLEAR  |  "
+                  f"{SLOW_BAIL} consecutive calls >{SLOW_THRESHOLD_S:.0f}s")
 
-    with open(p1_out, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=["title", "label", "pass1_decision", "passes", "elapsed_s"])
-        w.writeheader()
-        w.writerows(pass1_rows)
+        consecutive_unclear = 0
+        consecutive_slow    = 0
+        bail_reason         = ""
 
-    def p1_group(lbl):
-        grp    = [r for r in pass1_rows if r["label"] == lbl]
-        passed = [r for r in grp if r["passes"]]
-        missed = [r for r in grp if not r["passes"]]
-        return len(passed), len(grp), missed
+        for i, p in enumerate(run_papers):
+            decision, elapsed = pass1_screen(p["title"], p["abstract"],
+                                              p1_model, p1_local, trace_id)
+            p1_total_time += elapsed
+            passes = decision in ("YES", "MAYBE")
+            is_unclear = decision.startswith("UNCLEAR")
+            is_slow    = p1_local and elapsed > SLOW_THRESHOLD_S
 
-    rel_p, rel_t, rel_missed = p1_group("relevant")
-    brd_p, brd_t, _           = p1_group("borderline")
-    irr_p, irr_t, _           = p1_group("irrelevant")
+            # Update streak counters
+            consecutive_unclear = consecutive_unclear + 1 if is_unclear else 0
+            consecutive_slow    = consecutive_slow    + 1 if is_slow    else 0
 
-    print(f"\n── Pass 1 results (LLM time: {p1_total_time:.1f}s) ──")
-    print(f"  Recall (relevant):         {rel_p}/{rel_t} = {rel_p/rel_t*100:.1f}%  [target ≥95%]")
-    print(f"  Pass-through (borderline): {brd_p}/{brd_t} = {brd_p/brd_t*100:.1f}%")
-    print(f"  FP rate (irrelevant):      {irr_p}/{irr_t} = {irr_p/irr_t*100:.1f}%")
-    if rel_missed:
-        print(f"  False negatives:")
-        for r in rel_missed:
-            print(f"    ✗ {r['title'][:75]}")
+            pass1_rows.append({
+                "title":          p["title"][:80],
+                "label":          p["label"],
+                "pass1_decision": decision,
+                "passes":         passes,
+                "elapsed_s":      round(elapsed, 2),
+            })
+
+            status = "✓" if passes else ("⚠" if is_unclear else "✗")
+            slow_flag = "  ⏱SLOW" if is_slow else ""
+            print(f"  [{i+1:3d}/{len(run_papers)}] {status} {decision:14s}  [{p['label']:10s}]  "
+                  f"{elapsed:5.1f}s{slow_flag}  {p['title'][:45]}")
+
+            if not p1_local:
+                time.sleep(ONLINE_SLEEP)
+
+            thermal_check(i + 1)
+
+            # Bail checks (not in smoke mode — smoke is just observational)
+            if not smoke:
+                if consecutive_unclear >= UNCLEAR_BAIL:
+                    bail_reason = (f"UNCLEAR×{UNCLEAR_BAIL} in a row — model is looping or "
+                                   f"ignoring the prompt")
+                    break
+                if consecutive_slow >= SLOW_BAIL:
+                    bail_reason = (f">{SLOW_THRESHOLD_S:.0f}s for {SLOW_BAIL} consecutive calls "
+                                   f"— model too slow for screening")
+                    break
+
+        # Save whatever we have (partial or full)
+        with open(p1_out, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=["title", "label", "pass1_decision", "passes", "elapsed_s"])
+            w.writeheader()
+            w.writerows(pass1_rows)
+
+        if bail_reason:
+            print(f"\n  ⛔ AUTO-STOPPED after {len(pass1_rows)} papers: {bail_reason}")
+            print(f"  Partial results saved to {p1_out.name}")
+            # Print what we saw before bailing
+            _print_p1_summary(pass1_rows, p1_total_time, relevant_total)
+            return _p1_only_summary(tag, p1_display, p1_total_time, pass1_rows,
+                                    relevant_total, trace_id, stopped=bail_reason)
+
+        if smoke:
+            print(f"\n  ── Smoke test complete ({len(pass1_rows)} papers) ──")
+            _print_p1_summary(pass1_rows, p1_total_time, relevant_total)
+            print(f"\n  Results saved to {p1_out.name}")
+            print(f"  If results look good, re-run without --smoke for the full test.")
+            return _p1_only_summary(tag, p1_display, p1_total_time, pass1_rows,
+                                    relevant_total, trace_id, stopped="smoke")
+
+    _print_p1_summary(pass1_rows, p1_total_time, relevant_total)
+
+    if pass1_only:
+        print(f"\n  [--pass1-only] Skipping Pass 2. Results saved to {p1_out.name}")
+        return _p1_only_summary(tag, p1_display, p1_total_time, pass1_rows,
+                                relevant_total, trace_id)
 
     # ── Pass 2 ────────────────────────────────────────────────────────────────
-    to_score = [(p, r) for p, r in zip(papers, pass1_rows) if r["passes"]]
-    print(f"\nPass 2 — scoring {len(to_score)} papers that passed Pass 1 ...")
+    if smoke:
+        to_score = _select_smoke_p2_papers(papers)
+        print(f"\nPass 2 — SMOKE scoring {len(to_score)} papers with {p2_model} ...")
+    else:
+        to_score = [(p, r) for p, r in zip(papers, pass1_rows) if r["passes"]]
+        print(f"\nPass 2 — scoring {len(to_score)} papers that passed Pass 1 ...")
     pass2_rows    = []
     p2_total_time = 0.0
 
@@ -459,6 +745,19 @@ def run_single_eval(papers: list, tag: str,
     e2e        = len(rel_above) / relevant_total if relevant_total else 0
     total_time = p1_total_time + p2_total_time
 
+    if smoke:
+        print(f"\n── Pass 2 SMOKE results ({len(pass2_rows)} papers, {p2_total_time:.1f}s) ──")
+        for r in pass2_rows:
+            score_str = str(r["score"]) if r["score"] is not None else "?"
+            above = "✓" if r["above_threshold"] else "✗"
+            print(f"  {above} score={score_str:>2s}  [{r['label']:10s}]  {r['title'][:55]}")
+            if r["reason"]:
+                print(f"       {r['reason'][:80]}")
+        print(f"\n  Saved to {p2_out.name}")
+        print(f"  If scores look reasonable, re-run without --smoke for the full test.")
+        return _p1_only_summary(tag, p1_display, p1_total_time, pass1_rows,
+                                relevant_total, trace_id, stopped="smoke")
+
     print(f"\n── Pass 2 results (LLM time: {p2_total_time:.1f}s) ──")
     print(f"  Score (relevant):   {rel_m:.1f} ± {rel_sd:.1f}  (n={len(scores_for('relevant'))})")
     print(f"  Score (borderline): {brd_m:.1f} ± {brd_sd:.1f}  (n={len(scores_for('borderline'))})")
@@ -473,6 +772,9 @@ def run_single_eval(papers: list, tag: str,
         for r in rel_below:
             print(f"    score={r['score']}  {r['title'][:65]}")
 
+    rel_p, rel_t, rel_missed = _p1_group(pass1_rows, "relevant")
+    brd_p, brd_t, _           = _p1_group(pass1_rows, "borderline")
+    irr_p, irr_t, _           = _p1_group(pass1_rows, "irrelevant")
     summary = {
         "tag":             tag,
         "p1_model":        p1_display,
@@ -489,6 +791,7 @@ def run_single_eval(papers: list, tag: str,
         "p1_time_s":       round(p1_total_time, 1),
         "p2_time_s":       round(p2_total_time, 1),
         "total_time_s":    round(total_time, 1),
+        "stopped":         "",
         "langfuse_trace":  trace_id if LANGFUSE_ENABLED else "",
     }
 
@@ -528,7 +831,18 @@ def main():
                        help="Run all configs in sequence")
     group.add_argument("--list",   action="store_true",
                        help="List available configs and exit")
+    parser.add_argument("--pass1-only", action="store_true",
+                        help="Run Pass 1 only; skip Pass 2 entirely")
+    parser.add_argument("--reuse-pass1", metavar="CSV",
+                        help="Load Pass 1 decisions from a saved CSV and run Pass 2 only")
+    parser.add_argument("--smoke", action="store_true",
+                        help=f"Quick sanity check: run only first {SMOKE_N} papers, "
+                             f"auto-stop if model loops or is too slow")
     args = parser.parse_args()
+
+    if args.reuse_pass1 and args.pass1_only:
+        print("ERROR: --pass1-only and --reuse-pass1 are mutually exclusive.")
+        raise SystemExit(1)
 
     if args.list:
         print("Available configs:")
@@ -542,7 +856,7 @@ def main():
     needs_online = False
     run_list = list(CONFIGS.items()) if args.all else [(args.config, CONFIGS[args.config])]
     for _, (_, p1l, _, p2l) in run_list:
-        if not p1l or not p2l:
+        if (not p1l and not args.reuse_pass1) or (not p2l and not args.pass1_only):
             needs_online = True
     if needs_online and not OPENROUTER_KEY:
         print("ERROR: OPENROUTER_KEY env var required for online models.")
@@ -558,7 +872,17 @@ def main():
 
     summaries = []
     for tag, (p1m, p1l, p2m, p2l) in run_list:
-        result = run_single_eval(papers, tag, p1m, p1l, p2m, p2l)
+        # smoke+reuse-pass1 → run P2 smoke (don't skip P2)
+        # smoke alone        → run P1 smoke only (skip P2)
+        p1_only = args.pass1_only or (args.smoke and not args.reuse_pass1)
+        result = run_single_eval(papers, tag, p1m, p1l, p2m, p2l,
+                                 pass1_only=p1_only,
+                                 reuse_pass1_csv=args.reuse_pass1 or "",
+                                 smoke=args.smoke)
+        # Don't write smoke or bailed runs to comparison_summary.csv
+        stopped = result.get("stopped", "")
+        if stopped in ("smoke",) or (stopped and not args.pass1_only):
+            continue
         summaries.append(result)
 
     if len(summaries) > 1:

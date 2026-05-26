@@ -21,9 +21,13 @@ class LLMConfig:
     scoring_model: str = "local"  # "local" or "cloud" (prototype tier)
     scoring_model_name: str = "llama3.2:latest"  # model name for Pass 2
     openrouter_key: str = ""
-    # Screener model override: "local" = Ollama llama3.2, "cloud" = API for Pass 1
+    # Screener (Pass 1) — independent URL/key from Pass 2
     screening_model: str = "local"
     screening_model_name: str = "llama3.2:latest"
+    screening_base_url: str = "https://openrouter.ai/api/v1"
+    screening_api_key: str = ""
+    # NCBI API key (optional — enables 10 req/sec, retmax 500, batch 200)
+    ncbi_api_key: str = ""
     # History of previously successful (model, base_url) pairings
     previous_pairings: list = field(default_factory=list)
 
@@ -99,7 +103,7 @@ class AppConfig:
 
     def save(self, path: Optional[Path] = None):
         """Save config to JSON file."""
-        config_path = path or (Path.home() / ".paperPilot" / "config.json")
+        config_path = path or (Path.home() / ".papermatcher" / "config.json")
         config_path.parent.mkdir(parents=True, exist_ok=True)
         with open(config_path, "w") as f:
             json.dump(self.to_dict(), f, indent=2)
@@ -107,7 +111,7 @@ class AppConfig:
     @classmethod
     def load(cls, path: Optional[Path] = None) -> "AppConfig":
         """Load config from JSON file."""
-        config_path = path or (Path.home() / ".paperPilot" / "config.json")
+        config_path = path or (Path.home() / ".papermatcher" / "config.json")
         with open(config_path, "r") as f:
             data = json.load(f)
         return cls.from_dict(data)

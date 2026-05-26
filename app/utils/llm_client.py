@@ -1,6 +1,7 @@
 """OpenAI-compatible LLM client wrapper with 2-pass pipeline support."""
 
 import json
+import logging
 import os
 import time
 from pathlib import Path
@@ -8,10 +9,12 @@ from typing import Optional, Dict, Any, Tuple, List
 
 from openai import OpenAI, APIError, APITimeoutError
 
-# Load ~/.paperpilot/.env if present — VIP keys live here, never in source.
+logger = logging.getLogger(__name__)
+
+# Load ~/.papermatcher/.env if present — VIP keys live here, never in source.
 try:
     from dotenv import load_dotenv
-    _env_path = Path.home() / ".paperpilot" / ".env"
+    _env_path = Path.home() / ".papermatcher" / ".env"
     if _env_path.exists():
         load_dotenv(_env_path)
 except ImportError:
@@ -23,16 +26,22 @@ except ImportError:
 # prototype → public / BYOK build
 DISTRIBUTION_TIER = "prototype"
 
-# Keys — loaded from ~/.paperpilot/.env, never hardcoded in source.
+# Keys — loaded from ~/.papermatcher/.env, never hardcoded in source.
 # VIP .env must contain:
 #   PAPERPILOT_OPENROUTER_KEY=sk-or-...
 #   PAPERPILOT_NCBI_KEY=...
 VIP_OPENROUTER_KEY = os.environ.get("PAPERPILOT_OPENROUTER_KEY")
-NCBI_API_KEY = os.environ.get("PAPERPILOT_NCBI_KEY")
+
+# NCBI API key: VIP build uses env var; prototype falls back to file
+NCBI_API_KEY = os.environ.get("PAPERPILOT_NCBI_KEY") or None
+if NCBI_API_KEY is None:
+    _ncbi_key_path = Path.home() / ".papermatcher" / "ncbi_api_key.txt"
+    if _ncbi_key_path.exists():
+        NCBI_API_KEY = _ncbi_key_path.read_text().strip() or None
 
 # Screener model defaults
 SCREENER_LOCAL_MODEL = "llama3.2:latest"
-SCREENER_CLOUD_DEFAULT = "baidu/Qianfan-OCR-Fast:free"
+SCREENER_CLOUD_DEFAULT = "deepseek/deepseek-v4-flash:free"
 
 
 def _tier_display_name() -> str:
@@ -46,7 +55,7 @@ class LLMClient:
     Supports a 2-pass pipeline:
     - Pass 1 (screening): always local Ollama llama3.2:latest
     - Pass 2 (scoring + summary): model depends on tier
-      - vip: baidu/Qianfan-OCR-Fast:free via OpenRouter
+      - vip: deepseek/deepseek-v4-flash:free via OpenRouter
       - prototype: user-configurable model (local or cloud)
     """
 
@@ -54,22 +63,32 @@ class LLMClient:
                  api_key: str = "", model: str = "gpt-4o-mini",
                  scoring_model: str = "local", openrouter_key: str = "",
                  screening_model: str = "local",
-                 screening_model_name: str = "llama3.2:latest"):
+                 screening_model_name: str = "llama3.2:latest",
+                 screening_base_url: str = "",
+                 screening_api_key: str = ""):
         self.base_url = base_url
         self.model = model
         self.api_key = api_key or "not-needed"
-        self.scoring_model = scoring_model  # "local" or "cloud" (prototype tier)
+        self.scoring_model = scoring_model
         self.openrouter_key = openrouter_key
-        self.screening_model = screening_model  # "local" or "cloud"
+        self.screening_model = screening_model
         self.screening_model_name = screening_model_name
+        self.screening_base_url = screening_base_url or base_url
+        self.screening_api_key = screening_api_key or openrouter_key or api_key or "not-needed"
 
-        # Primary client (used for Pass 2 cloud scoring if applicable)
+        # Pass 2 cloud client
         self.client = OpenAI(base_url=base_url, api_key=self.api_key)
 
-        # Pass 1 always uses local Ollama (or cloud override for screener)
+        # Pass 1 local Ollama client
         self._ollama_client = OpenAI(
             base_url="http://localhost:11434/v1",
             api_key="not-needed",
+        )
+
+        # Pass 1 cloud client (may differ from Pass 2 if separate provider configured)
+        self._screener_cloud_client = OpenAI(
+            base_url=self.screening_base_url,
+            api_key=self.screening_api_key,
         )
 
     # ------------------------------------------------------------------
@@ -102,17 +121,14 @@ class LLMClient:
         # --- Choose screener client ---
         use_cloud_screener = (
             self.screening_model == "cloud"
-            and self.scoring_model == "cloud"
-            and self.base_url
+            and self.screening_base_url
         )
 
         if use_cloud_screener:
-            # Cloud API screener (prototype tier override)
-            model = self._resolve_pass2_model()  # reuse Pass 2 model
-            client = self._resolve_client(model)
+            # Cloud screener uses its own dedicated client and model name
             try:
-                response = client.chat.completions.create(
-                    model=model,
+                response = self._screener_cloud_client.chat.completions.create(
+                    model=self.screening_model_name,
                     messages=[
                         {"role": "system", "content": "You are a helpful assistant."},
                         {"role": "user", "content": prompt},
@@ -187,10 +203,13 @@ class LLMClient:
         if project_context:
             system_msg += f"\n\nCURRENT RUN FOCUS (takes priority for this search):\n{project_context}\n"
 
+        topics = profile.get("topics") or []
+        topics_line = f"Research areas: {', '.join(topics)}\n" if topics else ""
         user_msg = (
             f"Researcher: {profile.get('role', '')} studying {profile.get('research_description', '')}\n"
-            f"Keywords: {profile.get('keywords', '')}\n\n"
-            f"Title: {article.get('title', '')[:300]}\n"
+            f"Keywords: {profile.get('keywords', '')}\n"
+            f"{topics_line}"
+            f"\nTitle: {article.get('title', '')[:300]}\n"
             f"Abstract: {article.get('abstract', 'Not available')[:3000]}\n\n"
             "Output ONLY: {\"score\": <int 1-10>, \"reason\": \"<1-sentence>\"}"
         )
@@ -208,20 +227,20 @@ class LLMClient:
                     ],
                     max_tokens=300,
                     temperature=0.5,
-                    timeout=60,
+                    timeout=25,
                 )
                 content = response.choices[0].message.content or ""
                 result = self._parse_json_response(content)
                 score = max(1, min(10, result.get("score", 0)))
                 return score, result.get("reason", "No reason provided")
             except (APIError, APITimeoutError) as e:
+                logger.error("Scoring API error (attempt %d/%d): %s", attempt + 1, retries + 1, e)
                 if attempt < retries:
                     time.sleep(2 ** attempt)
                     continue
-                print(f"LLM API error during scoring: {e}")
                 return 0, f"API error: {e}"
             except Exception as e:
-                print(f"Unexpected error during scoring: {e}")
+                logger.error("Scoring unexpected error: %s", e)
                 return 0, f"Error: {e}"
 
         return 0, "Failed after retries"
@@ -233,19 +252,38 @@ class LLMClient:
     def summarize_article(self, profile: Dict[str, str],
                           article: Dict[str, str],
                           retries: int = 2) -> Dict[str, Any]:
-        """Generate summary and key points."""
+        """Generate structured summary and key points.
+
+        Prompt structure adapted from:
+        - fabric/analyze_paper_simple by Daniel Miessler (MIT License)
+          https://github.com/danielmiessler/fabric
+          Fields used: SUMMARY, IMPLICATIONS, METHODOLOGY, CONFLICT/BIAS, REPRODUCIBILITY
+        - fabric/create_tags by Daniel Miessler (MIT License)
+          Tag extraction logic: lowercase, specific, no spaces.
+        """
 
         system_msg = (
-            "You are a scientific writing assistant. Be concise. Respond ONLY in valid JSON."
+            "You are a scientific paper analysis assistant for a research literature tool. "
+            "Be concise and precise. Respond ONLY in valid JSON with no markdown formatting."
         )
 
         user_msg = (
-            f"Summarize for a {profile.get('role', 'researcher')} studying "
+            f"Analyze this paper for a {profile.get('role', 'researcher')} studying "
             f"{profile.get('research_description', 'general science')}.\n\n"
             f"Title: {article.get('title', '')}\n"
             f"Abstract: {article.get('abstract', 'Not available')[:3000]}\n\n"
-            "Respond: {\"summary\": \"...\", \"relevance_note\": \"...\", "
-            "\"key_points\": [...], \"tags\": [...]}"
+            "Respond with this exact JSON structure:\n"
+            "{\n"
+            "  \"summary\": \"<16-word sentence: the paper's main claim or finding>\",\n"
+            "  \"implications\": \"<20-word sentence: what this means for the field or researcher>\",\n"
+            "  \"methodology\": \"<15-word description: study type, sample size, key methods>\",\n"
+            "  \"conflict_bias\": \"<15-word assessment of funding sources, author affiliations, or potential bias. Write NONE DETECTED if clean>\",\n"
+            "  \"reproducibility\": \"<score 1-5>/<brief reason, e.g. 3/5 — Methods described but key parameters missing>\",\n"
+            "  \"relevance_note\": \"<15-word sentence: why this is relevant to the researcher's specific focus>\",\n"
+            "  \"key_points\": [\"<point 1, 12 words max>\", \"<point 2>\", \"<point 3>\"],\n"
+            "  \"tags\": [\"<lowercase_tag1>\", \"<lowercase_tag2>\", \"<tag3>\", \"<tag4>\", \"<tag5>\"]\n"
+            "}\n\n"
+            "Tag rules: lowercase, underscores instead of spaces, specific scientific terms only, 5-8 tags."
         )
 
         model = self._resolve_pass2_model()
@@ -261,26 +299,39 @@ class LLMClient:
                     ],
                     max_tokens=500,
                     temperature=0.3,
-                    timeout=60,
+                    timeout=25,
                 )
                 content = response.choices[0].message.content or ""
                 result = self._parse_json_response(content)
+                raw_tags = result.get("tags", [])
+                clean_tags = [
+                    t.strip().strip("_").replace(" ", "_").lower()
+                    for t in raw_tags if isinstance(t, str) and t.strip().strip("_")
+                ]
                 return {
                     "summary": result.get("summary", "Summary not available."),
+                    "implications": result.get("implications", ""),
+                    "methodology": result.get("methodology", ""),
+                    "conflict_bias": result.get("conflict_bias", ""),
+                    "reproducibility": result.get("reproducibility", ""),
                     "relevance_note": result.get("relevance_note", ""),
                     "key_points": result.get("key_points", []),
-                    "tags": result.get("tags", []),
+                    "tags": clean_tags,
                 }
             except (APIError, APITimeoutError) as e:
+                logger.error("Summarization API error (attempt %d/%d): %s", attempt + 1, retries + 1, e)
                 if attempt < retries:
                     time.sleep(2 ** attempt)
                     continue
-                print(f"LLM API error during summarization: {e}")
             except Exception as e:
-                print(f"Unexpected error during summarization: {e}")
+                logger.error("Summarization unexpected error: %s", e)
 
         return {
             "summary": "Summary generation failed.",
+            "implications": "",
+            "methodology": "",
+            "conflict_bias": "",
+            "reproducibility": "",
             "relevance_note": "",
             "key_points": [],
             "tags": [],
@@ -290,11 +341,19 @@ class LLMClient:
     # Connection test
     # ------------------------------------------------------------------
 
-    def test_connection(self) -> Tuple[bool, str]:
-        """Test that the LLM endpoint is reachable. Returns (success, message)."""
+    def test_connection(self, pass1: bool = False) -> Tuple[bool, str]:
+        """Test LLM endpoint. pass1=True tests the screener, False tests scorer."""
         try:
-            model = self._resolve_pass2_model()
-            client = self._resolve_client(model)
+            if pass1:
+                if self.screening_model == "local":
+                    client = self._ollama_client
+                    model = self.screening_model_name or "llama3.2:latest"
+                else:
+                    client = self._screener_cloud_client
+                    model = self.screening_model_name
+            else:
+                model = self._resolve_pass2_model()
+                client = self._resolve_client(model)
             resp = client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": "ping"}],
@@ -314,7 +373,7 @@ class LLMClient:
     def _resolve_pass2_model(self) -> str:
         """Determine which model to use for Pass 2 based on tier and config."""
         if DISTRIBUTION_TIER == "vip":
-            return "baidu/Qianfan-OCR-Fast:free"
+            return "deepseek/deepseek-v4-flash:free"
         # prototype tier
         if self.scoring_model == "cloud" and self.base_url:
             return self.model
@@ -325,7 +384,7 @@ class LLMClient:
         if model == "llama3.2:latest":
             return self._ollama_client
         if "openrouter" in self.base_url or "baidu" in model:
-            # VIP tier: use key from ~/.paperpilot/.env
+            # VIP tier: use key from ~/.papermatcher/.env
             # Prototype tier: use key entered in Settings
             key = VIP_OPENROUTER_KEY or self.openrouter_key or self.api_key or "not-needed"
             return OpenAI(base_url="https://openrouter.ai/api/v1", api_key=key)

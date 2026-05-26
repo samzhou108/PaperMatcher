@@ -34,11 +34,12 @@ class KeywordEntry(ctk.CTkFrame):
     no Toplevel, so it never blocks clicks on the rest of the UI.
     """
 
-    def __init__(self, parent, suggestions: list = None, **entry_kwargs):
+    def __init__(self, parent, suggestions: list = None, on_add_keyword=None, **entry_kwargs):
         super().__init__(parent, fg_color="transparent")
         self._suggestions = suggestions if suggestions is not None else KEYWORD_SUGGESTIONS
         self._buttons: list[ctk.CTkButton] = []
         self._sel_idx: int = -1
+        self._on_add_keyword = on_add_keyword
 
         self._entry = ctk.CTkEntry(self, **entry_kwargs)
         self._entry.pack(fill="x", padx=2, pady=2)
@@ -159,12 +160,9 @@ class KeywordEntry(ctk.CTkFrame):
         self._sel_idx = -1
 
     def _select(self, suggestion: str):
-        text = self._entry.get()
-        parts = text.split(",")
-        parts[-1] = " " + suggestion
-        new_text = ",".join(parts).lstrip(", ").strip() + ", "
+        if self._on_add_keyword:
+            self._on_add_keyword(suggestion)
         self._entry.delete(0, "end")
-        self._entry.insert(0, new_text)
         self._hide()
         self._entry.focus()
         self._entry.icursor("end")
@@ -189,6 +187,13 @@ class KeywordEntry(ctk.CTkFrame):
         if self._panel_visible and 0 <= self._sel_idx < len(self._buttons):
             self._select(self._buttons[self._sel_idx].cget("text"))
             return "break"
+        if self._on_add_keyword:
+            text = self._entry.get().strip().rstrip(",").strip()
+            if text:
+                self._on_add_keyword(text)
+                self._entry.delete(0, "end")
+                self._hide()
+                return "break"
 
     def _highlight(self):
         for i, btn in enumerate(self._buttons):

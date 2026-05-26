@@ -9,6 +9,7 @@ import customtkinter as ctk
 from app.gui.widgets.scrollable_frame import ScrollableFrame
 from app.models.config import AppConfig
 from app.gui.widgets.keyword_entry import KeywordEntry
+from app.gui.widgets.pill_frame import PillFrame
 from app.utils.llm_client import SCREENER_LOCAL_MODEL
 
 
@@ -52,7 +53,7 @@ class OnboardingWizard:
         self.current_step = 0
 
         self.window = ctk.CTkToplevel(master)
-        self.window.title("PaperPilot - Welcome")
+        self.window.title("PaperMatcher - Welcome")
         self.window.geometry("700x650")
         self.window.transient(master)
         self.window.grab_set()
@@ -81,7 +82,7 @@ class OnboardingWizard:
 
         self.title_label = ctk.CTkLabel(
             header,
-            text="Welcome to PaperPilot",
+            text="Welcome to PaperMatcher",
             font=ctk.CTkFont(size=24, weight="bold"),
         )
         self.title_label.pack(pady=(0, 5))
@@ -202,21 +203,33 @@ class OnboardingWizard:
 
         ctk.CTkLabel(
             self.content,
-            text="Keywords (comma-separated)",
+            text="Keywords",
             font=ctk.CTkFont(size=13, weight="bold"),
         ).pack(anchor="w", pady=(5, 2))
 
         ctk.CTkLabel(
             self.content,
-            text="Type to autocomplete — e.g. stem cells, immunology, neurodegeneration",
+            text="Type a keyword and press Enter or click a suggestion",
             font=ctk.CTkFont(size=11),
             text_color="gray",
         ).pack(anchor="w", pady=(0, 2))
 
-        self.profile_keywords = KeywordEntry(self.content)
+        # Pill display
+        init_kws = list(self.config.profile.keywords or [])
+        self._profile_kw_pills = PillFrame(
+            self.content,
+            items=init_kws,
+            read_only=False,
+            on_change=self._on_kw_pills_changed,
+        )
+        self._profile_kw_pills.pack(fill="x", pady=(0, 4))
+
+        self.profile_keywords = KeywordEntry(
+            self.content,
+            placeholder_text="Type a keyword and press Enter…",
+            on_add_keyword=self._add_keyword_pill,
+        )
         self.profile_keywords.pack(fill="x", pady=(0, 10))
-        if self.config.profile.keywords:
-            self.profile_keywords.insert(0, ", ".join(self.config.profile.keywords))
 
         ctk.CTkLabel(
             self.content,
@@ -277,7 +290,7 @@ class OnboardingWizard:
         """Step 2: PubMed configuration."""
         ctk.CTkLabel(
             self.content,
-            text="PaperPilot now searches PubMed directly instead of scraping emails.",
+            text="PaperMatcher now searches PubMed directly instead of scraping emails.",
             font=ctk.CTkFont(size=13, weight="bold"),
         ).pack(anchor="w", pady=(5, 2))
 
@@ -495,6 +508,19 @@ class OnboardingWizard:
         # Set initial values based on mode
         self._on_llm_mode_change()
 
+    def _add_keyword_pill(self, keyword: str):
+        """Add a keyword as a pill in the profile step."""
+        keyword = keyword.strip()
+        if not keyword:
+            return
+        current = self._profile_kw_pills.get_items()
+        if keyword not in current:
+            self._profile_kw_pills.set_items(current + [keyword])
+
+    def _on_kw_pills_changed(self, new_items: list):
+        """Called when a keyword pill is removed."""
+        pass
+
     def _on_llm_mode_change(self):
         """Update UI when user changes LLM mode."""
         mode = self.llm_mode.get()
@@ -557,8 +583,7 @@ class OnboardingWizard:
             self.config.profile.name = self.profile_name.get()
             self.config.profile.role = self.profile_role.get()
             self.config.profile.research_description = self.profile_research.get("1.0", "end").strip()
-            keywords_text = self.profile_keywords.get()
-            self.config.profile.keywords = [k.strip() for k in keywords_text.split(",") if k.strip()]
+            self.config.profile.keywords = self._profile_kw_pills.get_items()
             topics = [t for t, v in self.topic_vars.items() if v.get()]
             if self._other_var.get():
                 other_text = self._other_entry.get().strip()

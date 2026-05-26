@@ -1,10 +1,15 @@
 """User profile editor tab."""
 
 import customtkinter as ctk
+import json
+from pathlib import Path
 
 from app.gui.widgets.scrollable_frame import ScrollableFrame
 from app.models.config import AppConfig
 from app.gui.widgets.keyword_entry import KeywordEntry
+from app.gui.widgets.pill_frame import PillFrame
+
+MESH_CACHE_PATH = Path.home() / ".papermatcher" / "mesh_cache.json"
 
 
 FIELD_OPTIONS = [
@@ -88,14 +93,30 @@ class ProfileTab:
         ctk.CTkLabel(self.scroll, text="Keywords", font=ctk.CTkFont(size=13, weight="bold")).pack(anchor="w", pady=(5, 2))
         ctk.CTkLabel(
             self.scroll,
-            text="Comma-separated keywords — type to autocomplete",
+            text="Type a keyword and press Enter or click a suggestion",
             font=ctk.CTkFont(size=11),
             text_color="gray",
         ).pack(anchor="w", pady=(0, 2))
-        self.keywords_entry = KeywordEntry(self.scroll)
-        self.keywords_entry.pack(fill="x", pady=(0, 12))
+
+        # Pill display — shows current keywords with × to remove
+        init_kws = list(self.config.profile.keywords or [])
+        self._kw_pills = PillFrame(
+            self.scroll,
+            items=init_kws,
+            read_only=False,
+            on_change=self._on_pills_changed,
+        )
+        self._kw_pills.pack(fill="x", pady=(0, 4))
+
+        self.keywords_entry = KeywordEntry(
+            self.scroll,
+            placeholder_text="Type a keyword and press Enter…",
+            on_add_keyword=self._add_keyword_pill,
+        )
+        self.keywords_entry.pack(fill="x", pady=(0, 8))
+
         if self.config.profile.keywords:
-            self.keywords_entry.insert(0, ", ".join(self.config.profile.keywords))
+            self.keywords_entry.insert(0, "")
 
         # Fields of Interest
         ctk.CTkLabel(self.scroll, text="Fields of Interest", font=ctk.CTkFont(size=13, weight="bold")).pack(anchor="w", pady=(5, 2))
@@ -151,17 +172,183 @@ class ProfileTab:
         ).pack(side="left", padx=(10, 8))
         self._other_entry.pack(side="left")
 
+        # MeSH Cache section
+        sep = ctk.CTkFrame(self.scroll, height=1, fg_color="gray30")
+        sep.pack(fill="x", pady=(18, 10))
+
+        cache_row = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        cache_row.pack(fill="x", pady=(0, 10))
+
+        ctk.CTkLabel(
+            cache_row,
+            text="MeSH Cache",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(side="left")
+
+        ctk.CTkButton(
+            cache_row,
+            text="Manage",
+            width=90, height=28,
+            command=self._show_cache_manager,
+        ).pack(side="right")
+
+        ctk.CTkLabel(
+            self.scroll,
+            text="Keyword → MeSH descriptor mappings cached from NCBI lookups. Delete an entry to force a fresh lookup on the next run.",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=520,
+            justify="left",
+        ).pack(anchor="w", pady=(0, 12))
+
+    def _add_keyword_pill(self, keyword: str):
+        """Add a keyword as a pill."""
+        keyword = keyword.strip()
+        if not keyword:
+            return
+        current = self._kw_pills.get_items()
+        if keyword not in current:
+            self._kw_pills.set_items(current + [keyword])
+
+    def _on_pills_changed(self, new_items: list):
+        """Called when a pill is removed — nothing to do, pills are source of truth."""
+        pass
+
     def save_to_config(self):
         """Save current values to config."""
         self.config.profile.name = self.name_entry.get()
         self.config.profile.role = self.role_var.get()
         self.config.profile.research_description = self.research_text.get("1.0", "end").strip()
 
-        keywords_text = self.keywords_entry.get()
-        self.config.profile.keywords = [k.strip() for k in keywords_text.split(",") if k.strip()]
+        keywords = self._kw_pills.get_items()
+        if keywords:
+            self.config.profile.keywords = keywords
 
         topics = [t for t, v in self.topic_vars.items() if v.get()]
         if self._other_var.get():
             other_text = self._other_entry.get().strip()
             topics.append(other_text if other_text else "Other")
         self.config.profile.topics = topics
+
+    def _show_cache_manager(self):
+        """Open MeSH Cache manager dialog."""
+        dialog = ctk.CTkToplevel(self.master)
+        dialog.title("MeSH Cache")
+        dialog.geometry("480x440")
+        dialog.resizable(True, True)
+        dialog.minsize(400, 300)
+
+        # Title
+        ctk.CTkLabel(
+            dialog,
+            text="MeSH Cache",
+            font=ctk.CTkFont(size=14, weight="bold"),
+        ).pack(anchor="w", padx=15, pady=(15, 8))
+
+        # Scrollable frame
+        scroll_frame = ctk.CTkScrollableFrame(dialog)
+        scroll_frame.pack(fill="both", expand=True, padx=15, pady=(0, 8))
+        self._cache_scroll_frame = scroll_frame
+
+        # Bottom bar
+        bottom_bar = ctk.CTkFrame(dialog, fg_color="transparent")
+        bottom_bar.pack(fill="x", padx=15, pady=(0, 10))
+
+        ctk.CTkButton(
+            bottom_bar,
+            text="Clear All",
+            width=100,
+            fg_color="#C62828",
+            hover_color="#B71C1C",
+            command=lambda: self._clear_all_cache(dialog),
+        ).pack(side="left")
+
+        ctk.CTkButton(
+            bottom_bar,
+            text="Close",
+            width=80,
+            command=lambda: dialog.destroy(),
+        ).pack(side="right")
+
+        # Bind Escape
+        dialog.bind("<Escape>", lambda e: dialog.destroy())
+
+        # Populate
+        self._refresh_cache_list(scroll_frame)
+
+        # Raise after short delay
+        self.master.after(150, lambda: (dialog.lift(), dialog.focus_force()))
+
+    def _refresh_cache_list(self, scroll_frame):
+        """Refresh the cache list in the scrollable frame."""
+        # Destroy all children
+        for widget in scroll_frame.winfo_children():
+            widget.destroy()
+
+        try:
+            cache = json.loads(MESH_CACHE_PATH.read_text()) if MESH_CACHE_PATH.exists() and MESH_CACHE_PATH.stat().st_size > 0 else {}
+        except Exception:
+            cache = {}
+
+        if not cache:
+            ctk.CTkLabel(
+                scroll_frame,
+                text="Cache is empty.",
+                font=ctk.CTkFont(size=12),
+                text_color="gray",
+            ).pack(anchor="w", pady=10)
+            return
+
+        for keyword, descriptor in sorted(cache.items()):
+            row = ctk.CTkFrame(scroll_frame, fg_color="transparent")
+            row.pack(fill="x", pady=2)
+
+            ctk.CTkLabel(
+                row,
+                text=keyword,
+                font=ctk.CTkFont(size=12),
+                anchor="w",
+                width=200,
+            ).pack(side="left", padx=(0, 8))
+
+            display = descriptor if descriptor else "— no match —"
+            ctk.CTkLabel(
+                row,
+                text=display,
+                font=ctk.CTkFont(size=11),
+                text_color="gray" if not descriptor else None,
+                wraplength=180,
+            ).pack(side="left", fill="x", expand=True)
+
+            ctk.CTkButton(
+                row,
+                text="×",
+                width=28,
+                height=24,
+                fg_color="transparent",
+                text_color="gray",
+                hover_color="gray20",
+                command=lambda k=keyword: self._delete_cache_entry(k),
+            ).pack(side="right")
+
+    def _delete_cache_entry(self, keyword):
+        """Delete a single cache entry and refresh the list."""
+        try:
+            cache = json.loads(MESH_CACHE_PATH.read_text()) if MESH_CACHE_PATH.exists() and MESH_CACHE_PATH.stat().st_size > 0 else {}
+            cache.pop(keyword, None)
+            MESH_CACHE_PATH.write_text(json.dumps(cache, indent=2))
+        except Exception:
+            pass
+        if hasattr(self, "_cache_scroll_frame"):
+            self._refresh_cache_list(self._cache_scroll_frame)
+
+    def _clear_all_cache(self, dialog):
+        """Clear all cache entries."""
+        try:
+            if MESH_CACHE_PATH.exists():
+                MESH_CACHE_PATH.write_text("{}")
+        except Exception:
+            pass
+        if hasattr(self, "_cache_scroll_frame"):
+            self._refresh_cache_list(self._cache_scroll_frame)
+
