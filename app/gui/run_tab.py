@@ -1349,12 +1349,21 @@ class RunTab:
                 text_color="#4CAF50",
             ))
 
-        except PipelineStoppedException:
-            self._log("Pipeline stopped by user.", "warning")
-            self.master.after(0, lambda: self.status_label.configure(
-                text="Stopped",
-                text_color="#FF9800",
-            ))
+        except PipelineStoppedException as e:
+            error_msg = str(e)
+            # Check if this is an API error stop or user-initiated stop
+            if "API" in error_msg or "authentication" in error_msg.lower():
+                self._log(error_msg, "error")
+                self.master.after(0, lambda msg=error_msg: self.status_label.configure(
+                    text=f"Pipeline stopped: {msg}",
+                    text_color="#F44336",
+                ))
+            else:
+                self._log("Pipeline stopped by user.", "warning")
+                self.master.after(0, lambda: self.status_label.configure(
+                    text="Stopped",
+                    text_color="#FF9800",
+                ))
         except Exception as e:
             error_msg = str(e)
             self._log(f"Pipeline error: {error_msg}", "error")
