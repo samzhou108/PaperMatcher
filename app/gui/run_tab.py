@@ -1226,21 +1226,22 @@ class RunTab:
                 article_data["abstract"] = content["abstract"]
                 article_data["title"] = content.get("title", article_data.get("title", ""))
 
-                # Pass 1: Screen
-                if ollama_ok:
-                    screened = scorer.screen(article_data, keywords)
-                    if not screened:
+                # Score article (includes Pass 1 screening + Pass 2 scoring)
+                self._log(f"    Scoring with Pass 2...")
+                try:
+                    score, reason = scorer.score_article(
+                        profile,
+                        article_data,
+                        current_keywords=keywords,
+                        must_include=must_include,
+                        include_to_expand=self._advanced_terms.get("include_to_expand", []),
+                        do_not_include=self._advanced_terms.get("do_not_include", [])
+                    )
+                    if score == 1 and ollama_ok:
                         stats["screened_out"] += 1
                         self._log(f"    Pass 1: screened out (not relevant)")
                         self.master.after(0, lambda: self._update_stats(**stats))
                         continue
-
-                # Pass 2: Score
-                self._log(f"    Scoring with Pass 2...")
-                try:
-                    score, reason = scorer.score(article_data, keywords, must_include,
-                                                 self._advanced_terms.get("include_to_expand", []),
-                                                 self._advanced_terms.get("do_not_include", []))
                 except PipelineStoppedException:
                     raise
                 except (APIError, APITimeoutError) as e:
