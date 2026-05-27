@@ -1243,6 +1243,8 @@ class RunTab:
                     score, reason = scorer.score(article_data, keywords, must_include,
                                                  self._advanced_terms.get("include_to_expand", []),
                                                  self._advanced_terms.get("do_not_include", []))
+                except PipelineStoppedException:
+                    raise
                 except (APIError, APITimeoutError) as e:
                     if "404" in str(e) or "401" in str(e) or "APIError" in str(type(e).__name__):
                         stats["errors"] += 1
@@ -1281,6 +1283,8 @@ class RunTab:
                         article_data["relevance_reason"] = summary.get("relevance_note", "")
                         article_data["key_points"] = summary.get("key_points", [])
                         article_data["tags"] = summary.get("tags", [])
+                    except PipelineStoppedException:
+                        raise
                     except (APIError, APITimeoutError) as e:
                         if "404" in str(e) or "401" in str(e) or "APIError" in str(type(e).__name__):
                             stats["errors"] += 1

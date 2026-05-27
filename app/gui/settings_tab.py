@@ -366,18 +366,9 @@ class SettingsTab:
             font=ctk.CTkFont(size=16, weight="bold"),
         ).pack(anchor="w", pady=(8, 4))
 
-        ctk.CTkLabel(
-            self.scroll,
-            text="The 'Use' button installs and sets the selected model as your scoring model (Pass 2). To change the screening model (Pass 1), use the Pass 1 section above.",
-            font=ctk.CTkFont(size=10),
-            text_color="gray",
-            wraplength=550,
-            justify="left",
-        ).pack(anchor="w", pady=(0, 10))
-
         # Status row
         status_row = ctk.CTkFrame(self.scroll, fg_color="transparent")
-        status_row.pack(fill="x", pady=(0, 10))
+        status_row.pack(fill="x", pady=(0, 8))
 
         self._ollama_status_label = ctk.CTkLabel(
             status_row,
@@ -407,6 +398,13 @@ class SettingsTab:
             text_color=("black", "white"),
             command=self._refresh_ollama_status,
         ).pack(side="left", padx=(6, 0))
+
+        ctk.CTkLabel(
+            status_row,
+            text="The 'Use' button installs and sets the selected model for Pass 2 scoring.",
+            font=ctk.CTkFont(size=9),
+            text_color="gray",
+        ).pack(side="right", anchor="e")
 
         # Model cards
         self._model_cards: dict = {}
