@@ -178,10 +178,10 @@ Set API Base URL to `http://localhost:11434` and enter any Ollama model name. No
 
 - One article at a time, after each pipeline run
 - Shows: summary, abstract with keyword highlights, why it's relevant, implications, methodology, reproducibility score (1–5), conflict-of-interest flag
-- **Keep** — article saved to your database
+- **Accept** — article saved to your database with explicit approval feedback
 - **Reject** — article deleted from database immediately; stored with search context for future filtering
-- **Skip** — article kept, no feedback recorded
-- Keyboard shortcuts: `→` keep, `←` reject, `↓` skip
+- **Skip** — article kept without explicit feedback; can be re-reviewed later
+- Keyboard shortcuts: `→` accept, `←` reject, `↓` skip
 
 **Results tab**
 

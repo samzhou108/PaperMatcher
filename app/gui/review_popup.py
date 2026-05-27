@@ -368,7 +368,7 @@ class ReviewPopup:
         try:
             if article_id:
                 if action == "accepted":
-                    pass
+                    self.db.update_article(article_id, feedback="accepted")
                 elif action == "rejected":
                     self.db.reject_article(
                         article_id,
@@ -390,7 +390,7 @@ class ReviewPopup:
         """Close popup when all articles reviewed."""
         n_reviewed = len(self._reviewed_ids)
         n_rejected = len(self._rejected_ids)
-        n_accepted = n_reviewed - n_rejected  # accepted = reviewed - rejected (skipped = accepted)
+        n_kept = n_reviewed - n_rejected  # kept = reviewed - rejected (includes skipped)
 
         self.title_label.configure(text="✅ Review complete!")
         self.meta_label.configure(text="")
@@ -400,15 +400,17 @@ class ReviewPopup:
         self.abstract_text.insert(
             "1.0",
             f"Reviewed {n_reviewed} articles:\n"
-            f"  ✓  Kept:     {n_accepted}\n"
-            f"  ✗  Rejected: {n_rejected}  (removed from database)\n\n"
-            f"Rejected articles stored with search context — they will be\n"
-            f"skipped in future runs using similar keywords."
+            f"  ✓  Kept (accepted + skipped): {n_kept}\n"
+            f"  ✗  Rejected: {n_rejected}\n\n"
+            f"Rejected articles are stored with search context and will be\n"
+            f"skipped in future runs using similar keywords.\n\n"
+            f"Skipped articles remain in the database and will appear\n"
+            f"in future searches."
         )
 
-        # Disable action buttons, show Close
-        self.reject_btn.configure(state="disabled")
-        self.skip_btn.configure(state="disabled")
+        # Hide review buttons, show Close only
+        self.reject_btn.pack_forget()
+        self.skip_btn.pack_forget()
         self.accept_btn.configure(
             text="Close",
             fg_color=("gray75", "gray30"),
