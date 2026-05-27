@@ -1349,10 +1349,11 @@ class RunTab:
                 text_color="#FF9800",
             ))
         except Exception as e:
-            self._log(f"Pipeline error: {e}", "error")
+            error_msg = str(e)
+            self._log(f"Pipeline error: {error_msg}", "error")
             self._log(traceback.format_exc(), "error")
-            self.master.after(0, lambda: self.status_label.configure(
-                text=f"Pipeline failed: {e}",
+            self.master.after(0, lambda msg=error_msg: self.status_label.configure(
+                text=f"Pipeline failed: {msg}",
                 text_color="#F44336",
             ))
         finally:

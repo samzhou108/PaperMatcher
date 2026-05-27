@@ -238,6 +238,9 @@ class LLMClient:
                 if attempt < retries:
                     time.sleep(2 ** attempt)
                     continue
+                # Auth errors (401/404) should stop the pipeline, not return default score
+                if "404" in str(e) or "401" in str(e) or "not found" in str(e).lower():
+                    raise
                 return 0, f"API error: {e}"
             except Exception as e:
                 logger.error("Scoring unexpected error: %s", e)
@@ -323,6 +326,9 @@ class LLMClient:
                 if attempt < retries:
                     time.sleep(2 ** attempt)
                     continue
+                # Auth errors (401/404) should stop the pipeline, not return default summary
+                if "404" in str(e) or "401" in str(e) or "not found" in str(e).lower():
+                    raise
             except Exception as e:
                 logger.error("Summarization unexpected error: %s", e)
 
