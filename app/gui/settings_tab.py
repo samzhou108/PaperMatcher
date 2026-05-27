@@ -274,8 +274,6 @@ class SettingsTab:
         self.test_result = ctk.CTkLabel(
             p2_test_row, text="", font=ctk.CTkFont(size=12))
         self.test_result.pack(side="left", padx=(12, 0))
-        ctk.CTkLabel(self.scroll, text="The 'Use' button below sets the selected model as your scoring model (Pass 2). To change the screening model (Pass 1), use the Pass 1 section above.",
-                     font=ctk.CTkFont(size=10), text_color="gray", wraplength=550, justify="left").pack(anchor="w", pady=(2, 4))
 
         # Apply initial visibility
         self._on_screening_model_change()
@@ -367,6 +365,15 @@ class SettingsTab:
             text="Local Model Installer (Ollama)",
             font=ctk.CTkFont(size=16, weight="bold"),
         ).pack(anchor="w", pady=(8, 4))
+
+        ctk.CTkLabel(
+            self.scroll,
+            text="The 'Use' button installs and sets the selected model as your scoring model (Pass 2). To change the screening model (Pass 1), use the Pass 1 section above.",
+            font=ctk.CTkFont(size=10),
+            text_color="gray",
+            wraplength=550,
+            justify="left",
+        ).pack(anchor="w", pady=(0, 10))
 
         # Status row
         status_row = ctk.CTkFrame(self.scroll, fg_color="transparent")

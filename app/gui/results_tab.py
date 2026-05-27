@@ -5,6 +5,8 @@ import subprocess
 import sys
 from datetime import datetime
 from tkinter import filedialog
+from tkinter import ttk
+import tkinter
 
 import customtkinter as ctk
 
@@ -676,30 +678,32 @@ class ResultsTab:
         summary_text.pack(fill="x", padx=15, pady=(0, 5))
         summary_text.insert("1.0", article.get("summary", ""))
 
-        # Tags field — horizontal scroll via Canvas
+        # Tags field — horizontal scroll via Canvas + Scrollbar
         ctk.CTkLabel(content, text="Tags:", font=ctk.CTkFont(size=12)).pack(anchor="w", padx=15, pady=(5, 2))
         tag_list_init = [t.strip() for t in article.get("tags", "").split(",") if t.strip()]
 
-        # Create a horizontal scrollable container using Canvas
-        tag_canvas = ctk.CTkCanvas(content, height=50, bg="#212121", highlightthickness=0)
-        tag_canvas.pack(fill="x", padx=15, pady=(0, 2))
+        # Frame to hold canvas and scrollbar
+        tag_frame = ctk.CTkFrame(content, fg_color="transparent")
+        tag_frame.pack(fill="x", padx=15, pady=(0, 2))
 
+        # Canvas for horizontal scrolling
+        tag_canvas = tkinter.Canvas(tag_frame, height=50, bg="#212121", highlightthickness=0)
+        tag_canvas.pack(fill="x", side="top")
+
+        # Horizontal scrollbar
+        tag_scrollbar = ttk.Scrollbar(tag_frame, orient="horizontal", command=tag_canvas.xview)
+        tag_scrollbar.pack(fill="x", side="bottom")
+        tag_canvas.configure(xscrollcommand=tag_scrollbar.set)
+
+        # Container inside canvas
         tag_container = ctk.CTkFrame(tag_canvas, fg_color="transparent")
         tag_canvas_window = tag_canvas.create_window(0, 0, window=tag_container, anchor="nw")
         tag_pills = PillFrame(tag_container, items=tag_list_init, read_only=False)
-        tag_pills.pack(fill="both", expand=True)
+        tag_pills.pack(fill="both", expand=True, padx=2, pady=2)
 
         def _on_tag_canvas_configure(event=None):
             tag_canvas.configure(scrollregion=tag_canvas.bbox("all"))
         tag_container.bind("<Configure>", _on_tag_canvas_configure)
-
-        # Mousewheel binding for horizontal scroll on canvas
-        def _on_tag_scroll(event):
-            if event.delta > 0:
-                tag_canvas.xview_scroll(-3, "units")
-            else:
-                tag_canvas.xview_scroll(3, "units")
-        tag_canvas.bind("<MouseWheel>", _on_tag_scroll)
 
         tag_add_frame = ctk.CTkFrame(content, fg_color="transparent")
         tag_add_frame.pack(fill="x", padx=15, pady=(0, 5))

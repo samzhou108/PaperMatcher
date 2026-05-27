@@ -1186,8 +1186,7 @@ class RunTab:
 
             for i, article_data in enumerate(articles):
                 if self._stop_flag:
-                    self._log("Pipeline stopped by user.", "warning")
-                    break
+                    raise PipelineStoppedException("User stopped the pipeline")
 
                 pct = 0.20 + (0.7 * (i / len(articles)))
                 self.master.after(0, lambda v=pct: self.progress.set(v))
@@ -1240,9 +1239,26 @@ class RunTab:
 
                 # Pass 2: Score
                 self._log(f"    Scoring with Pass 2...")
-                score, reason = scorer.score(article_data, keywords, must_include,
-                                             self._advanced_terms.get("include_to_expand", []),
-                                             self._advanced_terms.get("do_not_include", []))
+                try:
+                    score, reason = scorer.score(article_data, keywords, must_include,
+                                                 self._advanced_terms.get("include_to_expand", []),
+                                                 self._advanced_terms.get("do_not_include", []))
+                except (APIError, APITimeoutError) as e:
+                    if "404" in str(e) or "401" in str(e) or "APIError" in str(type(e).__name__):
+                        stats["errors"] += 1
+                        self._log(f"    API error (invalid key?): {e}", "error")
+                        self.master.after(0, lambda: self._update_stats(**stats))
+                        raise PipelineStoppedException(f"API authentication error: {e}")
+                    stats["errors"] += 1
+                    self._log(f"    Scoring error: {e}", "error")
+                    self.master.after(0, lambda: self._update_stats(**stats))
+                    continue
+                except Exception as e:
+                    stats["errors"] += 1
+                    self._log(f"    Scoring error: {e}", "error")
+                    self.master.after(0, lambda: self._update_stats(**stats))
+                    continue
+
                 article_data["relevance_score"] = score
                 article_data["relevance_reason"] = reason
                 stats["scored"] += 1
@@ -1252,19 +1268,29 @@ class RunTab:
 
                 if scorer.should_save(score, threshold):
                     if self._stop_flag:
-                        self._log("Pipeline stopped by user.", "warning")
-                        break
+                        raise PipelineStoppedException("User stopped the pipeline")
                     self._log(f"    Score {score} >= threshold {threshold}, generating summary...", "success")
 
-                    summary = summarizer.summarize(profile, article_data)
-                    article_data["summary"] = summary.get("summary", "")
-                    article_data["implications"] = summary.get("implications", "")
-                    article_data["methodology"] = summary.get("methodology", "")
-                    article_data["conflict_bias"] = summary.get("conflict_bias", "")
-                    article_data["reproducibility"] = summary.get("reproducibility", "")
-                    article_data["relevance_reason"] = summary.get("relevance_note", "")
-                    article_data["key_points"] = summary.get("key_points", [])
-                    article_data["tags"] = summary.get("tags", [])
+                    try:
+                        summary = summarizer.summarize(profile, article_data)
+                        article_data["summary"] = summary.get("summary", "")
+                        article_data["implications"] = summary.get("implications", "")
+                        article_data["methodology"] = summary.get("methodology", "")
+                        article_data["conflict_bias"] = summary.get("conflict_bias", "")
+                        article_data["reproducibility"] = summary.get("reproducibility", "")
+                        article_data["relevance_reason"] = summary.get("relevance_note", "")
+                        article_data["key_points"] = summary.get("key_points", [])
+                        article_data["tags"] = summary.get("tags", [])
+                    except (APIError, APITimeoutError) as e:
+                        if "404" in str(e) or "401" in str(e) or "APIError" in str(type(e).__name__):
+                            stats["errors"] += 1
+                            self._log(f"    API error during summarization (invalid key?): {e}", "error")
+                            self.master.after(0, lambda: self._update_stats(**stats))
+                            raise PipelineStoppedException(f"API error: {e}")
+                        stats["errors"] += 1
+                        self._log(f"    Summarization error: {e}", "error")
+                        self.master.after(0, lambda: self._update_stats(**stats))
+                        continue
 
                     # Mark processed and get ID for feedback
                     article_id = self.db.mark_processed(article_data)
@@ -1469,8 +1495,7 @@ class RunTab:
 
             for i, article_data in enumerate(articles):
                 if self._stop_flag:
-                    self._log("Pipeline stopped by user.", "warning")
-                    break
+                    raise PipelineStoppedException("User stopped the pipeline")
 
                 pct = 0.20 + (0.7 * (i / len(articles)))
                 self.master.after(0, lambda v=pct: self.progress.set(v))
