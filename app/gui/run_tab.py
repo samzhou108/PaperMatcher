@@ -1208,8 +1208,6 @@ class RunTab:
                 if self.db.is_processed(
                     doi=article_data.get("doi", ""),
                     pmid=article_data.get("pmid", ""),
-                    or_keywords=keywords,
-                    and_keywords=must_include,
                 ):
                     stats["skipped"] += 1
                     self._log(f"    Already processed, skipping.")
