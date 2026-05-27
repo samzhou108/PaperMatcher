@@ -1216,8 +1216,8 @@ class RunTab:
 
                 # Fetch content
                 self._log(f"    Fetching content...")
-                content = fetcher.fetch(article_data)
-                if not content.get("abstract"):
+                content = fetcher.fetch_by_pmid(article_data.get("pmid", ""))
+                if not content or not content.get("abstract"):
                     stats["skipped"] += 1
                     self._log(f"    No abstract available, skipping.")
                     self.master.after(0, lambda: self._update_stats(**stats))
