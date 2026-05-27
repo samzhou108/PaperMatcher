@@ -65,14 +65,15 @@ Only articles that pass your review are saved.
 
 ## Installation
 
-### Requirements
+### For End Users (Recommended)
 
-- macOS (tested on Apple Silicon)
-- Python 3.11+
-- [Ollama](https://ollama.ai) with `llama3.2:latest` pulled
-- OpenRouter API key (optional — for cloud Pass 2)
+See **[DISTRIBUTION.md](DISTRIBUTION.md)** for installation instructions.
 
-### Setup
+**Quick start:** Download `PaperMatcher_v1.0.0.dmg` → drag to Applications → done. No coding required.
+
+### For Developers
+
+To build from source:
 
 ```bash
 git clone https://github.com/samzhou108/PaperMatcher
@@ -82,6 +83,8 @@ source venv/bin/activate
 pip install -r requirements.txt
 python3 main.py
 ```
+
+For packaging your own build, see [PACKAGING.md](PACKAGING.md).
 
 First launch opens a 3-step onboarding screen (Profile → PubMed Settings → LLM). Subsequent launches go straight to the main window.
 
