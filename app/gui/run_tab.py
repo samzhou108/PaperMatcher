@@ -1033,20 +1033,19 @@ class RunTab:
         self.pipeline_thread.start()
 
     def _stop_pipeline(self):
-        """Signal the pipeline to stop. Second click force-resets the UI immediately."""
+        """Signal the pipeline to stop. Second click resets UI but keeps stop flag."""
         if self._stop_flag:
-            # Second click: pipeline is blocked in an API call — reset UI now
-            # and let the thread finish in the background (it will exit on next check).
+            # Second click: already requested stop, just reset UI
+            # The pipeline will exit when it checks _stop_flag on next iteration
             self.is_running = False
-            self._stop_flag = False
             self.run_btn.configure(state="normal", text="Run Pipeline")
             self.stop_btn.configure(state="disabled", text="Stop")
             self._generate_btn.configure(state="normal")
-            self.status_label.configure(text="Force stopped", text_color="#FF9800")
-            self._log("Force stopped. Current API call may still finish in background.", "warning")
+            self.status_label.configure(text="Stopping...", text_color="#FF9800")
+            self._log("Force stop requested. Waiting for current operation to finish...", "warning")
             return
         self._stop_flag = True
-        self._log("Stop requested — will stop after current API call (click again to force).", "warning")
+        self._log("Stop requested — will stop after current API call (click again to reset UI).", "warning")
         self.stop_btn.configure(text="Force Stop")  # keep enabled for second click
 
     def _run_pipeline(self):
