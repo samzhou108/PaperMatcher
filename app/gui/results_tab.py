@@ -646,9 +646,13 @@ class ResultsTab:
         dialog.transient(self.master)
         dialog.grab_set()
 
+        # Wrap all content in a scrollable frame for vertical scrolling
+        content = ScrollableFrame(dialog, fg_color="transparent")
+        content.pack(fill="both", expand=True, padx=0, pady=0)
+
         # Title (read-only)
         ctk.CTkLabel(
-            dialog,
+            content,
             text=article.get("title", "Untitled"),
             font=ctk.CTkFont(size=14, weight="bold"),
             wraplength=560,
@@ -656,7 +660,7 @@ class ResultsTab:
         ).pack(anchor="w", padx=15, pady=(15, 10))
 
         # Score field
-        score_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        score_frame = ctk.CTkFrame(content, fg_color="transparent")
         score_frame.pack(fill="x", padx=15, pady=(0, 10))
         ctk.CTkLabel(score_frame, text="Relevance Score (1-10):", font=ctk.CTkFont(size=12)).pack(anchor="w")
         score_var = ctk.IntVar(value=article.get("relevance_score", 0))
@@ -667,20 +671,37 @@ class ResultsTab:
         ctk.CTkLabel(score_frame, textvariable=score_var, font=ctk.CTkFont(size=12, weight="bold")).pack(side="left")
 
         # Summary field
-        ctk.CTkLabel(dialog, text="Summary:", font=ctk.CTkFont(size=12)).pack(anchor="w", padx=15, pady=(5, 2))
-        summary_text = ctk.CTkTextbox(dialog, height=80, wrap="word")
+        ctk.CTkLabel(content, text="Summary:", font=ctk.CTkFont(size=12)).pack(anchor="w", padx=15, pady=(5, 2))
+        summary_text = ctk.CTkTextbox(content, height=80, wrap="word")
         summary_text.pack(fill="x", padx=15, pady=(0, 5))
         summary_text.insert("1.0", article.get("summary", ""))
 
-        # Tags field — pill editor
-        ctk.CTkLabel(dialog, text="Tags:", font=ctk.CTkFont(size=12)).pack(anchor="w", padx=15, pady=(5, 2))
+        # Tags field — horizontal scroll via Canvas
+        ctk.CTkLabel(content, text="Tags:", font=ctk.CTkFont(size=12)).pack(anchor="w", padx=15, pady=(5, 2))
         tag_list_init = [t.strip() for t in article.get("tags", "").split(",") if t.strip()]
-        tag_scroll = ScrollableFrame(dialog, fg_color="transparent", height=60)
-        tag_pills = PillFrame(tag_scroll, items=tag_list_init, read_only=False)
-        tag_scroll.pack(fill="x", padx=15, pady=(0, 2))
-        tag_pills.pack(fill="x")
 
-        tag_add_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        # Create a horizontal scrollable container using Canvas
+        tag_canvas = ctk.CTkCanvas(content, height=50, bg="#212121", highlightthickness=0)
+        tag_canvas.pack(fill="x", padx=15, pady=(0, 2))
+
+        tag_container = ctk.CTkFrame(tag_canvas, fg_color="transparent")
+        tag_canvas_window = tag_canvas.create_window(0, 0, window=tag_container, anchor="nw")
+        tag_pills = PillFrame(tag_container, items=tag_list_init, read_only=False)
+        tag_pills.pack(fill="both", expand=True)
+
+        def _on_tag_canvas_configure(event=None):
+            tag_canvas.configure(scrollregion=tag_canvas.bbox("all"))
+        tag_container.bind("<Configure>", _on_tag_canvas_configure)
+
+        # Mousewheel binding for horizontal scroll on canvas
+        def _on_tag_scroll(event):
+            if event.delta > 0:
+                tag_canvas.xview_scroll(-3, "units")
+            else:
+                tag_canvas.xview_scroll(3, "units")
+        tag_canvas.bind("<MouseWheel>", _on_tag_scroll)
+
+        tag_add_frame = ctk.CTkFrame(content, fg_color="transparent")
         tag_add_frame.pack(fill="x", padx=15, pady=(0, 5))
         tag_add_entry = ctk.CTkEntry(tag_add_frame, placeholder_text="Add tag, press Enter…")
         tag_add_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
@@ -696,20 +717,20 @@ class ResultsTab:
                       command=_add_tag).pack(side="left")
 
         # Reason field
-        ctk.CTkLabel(dialog, text="Relevance Reason:", font=ctk.CTkFont(size=12)).pack(anchor="w", padx=15, pady=(5, 2))
-        reason_text = ctk.CTkTextbox(dialog, height=60, wrap="word")
+        ctk.CTkLabel(content, text="Relevance Reason:", font=ctk.CTkFont(size=12)).pack(anchor="w", padx=15, pady=(5, 2))
+        reason_text = ctk.CTkTextbox(content, height=60, wrap="word")
         reason_text.pack(fill="x", padx=15, pady=(0, 5))
         reason_text.insert("1.0", article.get("relevance_reason", ""))
 
         # Include/Exclude checkboxes
         include_var = ctk.BooleanVar(value=True)
-        ctk.CTkCheckBox(dialog, text="Include in results", variable=include_var).pack(anchor="w", padx=15, pady=(5, 0))
+        ctk.CTkCheckBox(content, text="Include in results", variable=include_var).pack(anchor="w", padx=15, pady=(5, 0))
 
         # Feedback selector
         feedback_var = ctk.StringVar(value=article.get("feedback", ""))
-        ctk.CTkLabel(dialog, text="Feedback:", font=ctk.CTkFont(size=12)).pack(anchor="w", padx=15, pady=(5, 2))
+        ctk.CTkLabel(content, text="Feedback:", font=ctk.CTkFont(size=12)).pack(anchor="w", padx=15, pady=(5, 2))
         feedback_combo = ctk.CTkComboBox(
-            dialog, width=200,
+            content, width=200,
             values=["", "relevant", "not_relevant"],
             variable=feedback_var,
         )
@@ -731,8 +752,9 @@ class ResultsTab:
                 self._last_count = -1
                 self.refresh(force=True)
             except Exception as e:
-                ctk.CTkLabel(dialog, text=f"Error: {e}", text_color="red").pack()
+                ctk.CTkLabel(content, text=f"Error: {e}", text_color="red").pack()
 
+        # Buttons stay outside scrollable area
         btn_frame = ctk.CTkFrame(dialog, fg_color="transparent")
         btn_frame.pack(pady=(10, 15))
         ctk.CTkButton(btn_frame, text="Save", width=100, command=save_and_close).pack(side="left", padx=10)
