@@ -11,7 +11,7 @@ from typing import List, Optional
 
 import customtkinter as ctk
 import httpx
-from openai import APIError
+from openai import APIError, APITimeoutError
 
 from app.models.config import AppConfig
 from app.gui.review_popup import ReviewPopup
@@ -1179,6 +1179,14 @@ class RunTab:
             fetcher = ContentFetcher()
             scorer = RelevanceScorer(llm, db=self.db, project_context=self._project_context)
             summarizer = Summarizer(llm)
+
+            # Build profile dict for scoring
+            profile = {
+                "role": self.config.profile.role or "",
+                "research_description": self.config.profile.research_description or "",
+                "keywords": self.config.profile.keywords or [],
+                "topics": self.config.profile.topics or [],
+            }
 
             # Use self._saved_articles so the review popup can access it after pipeline
             self._saved_articles = []
