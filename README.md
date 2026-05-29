@@ -19,6 +19,8 @@ I created this project by myself in my spare time as a tool to help other traine
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/U5A520EZ8P)
 
+---
+
 **A free or low-cost, privacy-first literature triage tool for biomedical researchers.**
 
 </div>
