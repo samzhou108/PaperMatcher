@@ -427,6 +427,24 @@ class ArticleDatabase:
                    "relevance_score", "relevance_reason", "summary", "tags", "include", "feedback", "processed_at"]
         return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
+    def get_skipped_articles(self, limit: int = 5000) -> List[Dict[str, Any]]:
+        """Get articles that were saved but not explicitly liked/disliked (skipped during review)."""
+        conn = self._get_conn()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT id, doi, pmid, title, journal, authors, url, abstract,
+                   relevance_score, relevance_reason, summary, tags, include, feedback, processed_at
+            FROM processed_articles
+            WHERE include = 1 AND (feedback IS NULL OR feedback = '')
+            ORDER BY processed_at DESC
+            LIMIT ?
+        """, (limit,))
+
+        columns = ["id", "doi", "pmid", "title", "journal", "authors", "url", "abstract",
+                   "relevance_score", "relevance_reason", "summary", "tags", "include", "feedback", "processed_at"]
+        return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
     def get_seen_ids(self) -> tuple[set[str], set[str]]:
         """Return (pmids, dois) for all processed and rejected articles.
 

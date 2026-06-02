@@ -402,7 +402,7 @@ class SettingsTab:
         ctk.CTkLabel(
             status_row,
             text="The 'Use' button installs and sets the selected model for Pass 2 scoring.",
-            font=ctk.CTkFont(size=9),
+            font=ctk.CTkFont(size=12),
             text_color="gray",
         ).pack(side="right", anchor="e")
 

@@ -1,5 +1,9 @@
 # PaperMatcher Packaging Guide
 
+**For Developers & Contributors**
+
+This guide is for developers who want to rebuild PaperMatcher from source or customize the packaging. **End users should download the pre-built DMG installer instead** (see DISTRIBUTION.md).
+
 ## Building the Standalone macOS App
 
 PaperMatcher is bundled as a native macOS app using PyInstaller. The build produces `dist/PaperMatcher.app`, a self-contained application that requires no Python installation.

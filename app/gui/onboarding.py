@@ -58,6 +58,9 @@ class OnboardingWizard:
         self.window.transient(master)
         self.window.grab_set()
 
+        # Handle close button (X) — complete onboarding with current config
+        self.window.protocol("WM_DELETE_WINDOW", self._on_close)
+
         # Center
         self.window.update_idletasks()
         x = (self.window.winfo_screenwidth() // 2) - 350
@@ -222,7 +225,9 @@ class OnboardingWizard:
             read_only=False,
             on_change=self._on_kw_pills_changed,
         )
-        self._profile_kw_pills.pack(fill="x", pady=(0, 4))
+        # Only pack if there are keywords; otherwise it wastes space
+        if init_kws:
+            self._profile_kw_pills.pack(fill="x", pady=(0, 2))
 
         self.profile_keywords = KeywordEntry(
             self.content,
@@ -516,10 +521,20 @@ class OnboardingWizard:
         current = self._profile_kw_pills.get_items()
         if keyword not in current:
             self._profile_kw_pills.set_items(current + [keyword])
+            # Ensure PillFrame is packed when keywords are added
+            if not self._profile_kw_pills.winfo_manager():  # if not packed
+                self._profile_kw_pills.pack(fill="x", pady=(0, 2), before=self.profile_keywords)
 
     def _on_kw_pills_changed(self, new_items: list):
-        """Called when a keyword pill is removed."""
-        pass
+        """Called when a keyword pill is removed — show/hide the pill frame based on content."""
+        if new_items:
+            # Show pills frame if it has items
+            if not self._profile_kw_pills.winfo_manager():  # if not packed
+                self._profile_kw_pills.pack(fill="x", pady=(0, 2), before=self.profile_keywords)
+        else:
+            # Hide pills frame if empty
+            if self._profile_kw_pills.winfo_manager():  # if packed
+                self._profile_kw_pills.pack_forget()
 
     def _on_llm_mode_change(self):
         """Update UI when user changes LLM mode."""
@@ -613,6 +628,11 @@ class OnboardingWizard:
             self.config.llm.relevance_threshold = self.threshold_var.get()
             self.config.llm.screening_model = "local"
             self.config.llm.screening_model_name = SCREENER_LOCAL_MODEL
+
+    def _on_close(self):
+        """Handle close button (X) — save current config and launch main app."""
+        self._save_current_step()
+        self._finish()
 
     def _finish(self):
         """Complete onboarding."""

@@ -12,6 +12,7 @@ import customtkinter as ctk
 
 from app.gui.widgets.scrollable_frame import ScrollableFrame
 from app.gui.widgets.pill_frame import PillFrame
+from app.gui.review_popup import ReviewPopup
 from app.utils.db import ArticleDatabase
 
 
@@ -76,6 +77,18 @@ class ResultsTab:
             hover_color=("gray65", "gray40"),
             text_color=("black", "white"),
             command=self._export_csv,
+        ).pack(side="right", padx=(4, 0))
+
+        # Review Skipped button
+        ctk.CTkButton(
+            bar,
+            text="Review Skipped",
+            width=110,
+            height=28,
+            fg_color=("#FF9800", "#FF7043"),
+            hover_color=("#FFB74D", "#FF8A65"),
+            text_color=("black", "white"),
+            command=self._review_skipped,
         ).pack(side="right", padx=(4, 0))
 
         # Clear All button
@@ -183,6 +196,35 @@ class ResultsTab:
         self._page += 1
         self._render_page()
 
+    def _review_skipped(self):
+        """Open review popup for skipped articles (saved but not liked/disliked)."""
+        skipped = self.db.get_skipped_articles(limit=5000)
+        if not skipped:
+            # Show a simple message if no skipped articles
+            dialog = ctk.CTkToplevel(self.master)
+            dialog.title("No Skipped Articles")
+            dialog.geometry("350x120")
+            dialog.transient(self.master)
+            dialog.grab_set()
+            ctk.CTkLabel(
+                dialog,
+                text="No skipped articles to review.\nAll saved articles have been reviewed.",
+                font=ctk.CTkFont(size=12),
+                wraplength=320,
+            ).pack(pady=20)
+            ctk.CTkButton(dialog, text="OK", command=dialog.destroy).pack(pady=(0, 10))
+            return
+
+        # Open review popup with skipped articles
+        ReviewPopup(
+            master=self.master,
+            db=self.db,
+            saved_articles=skipped,
+            profile_keywords=[],  # Not in an active run context
+            run_keywords=[],      # No specific run keywords
+            must_include_keywords=[]
+        )
+
     def _confirm_clear_all(self):
         """Show a confirmation dialog before clearing all articles."""
         count = self._last_count if self._last_count >= 0 else 0
@@ -219,15 +261,51 @@ class ResultsTab:
                        command=dialog.destroy).pack(side="left", padx=10)
 
     def _delete_article(self, article_id: int):
-        """Delete a saved article from the database."""
-        if not article_id:
+        """Delete a saved article with confirmation."""
+        if not article_id or article_id not in self._article_map:
             return
-        try:
-            self.db.delete_article(article_id)
-            self._last_count = -1  # force DB re-fetch on next refresh
-            self.refresh(force=True)
-        except Exception as e:
-            print(f"Error deleting article {article_id}: {e}")
+
+        article = self._article_map[article_id]
+        title = article.get("title", "Unknown Article")
+
+        dialog = ctk.CTkToplevel(self.master)
+        dialog.title("Delete Article")
+        dialog.geometry("450x150")
+        dialog.transient(self.master)
+        dialog.grab_set()
+
+        ctk.CTkLabel(
+            dialog,
+            text="Delete this article?",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(pady=(10, 5))
+
+        ctk.CTkLabel(
+            dialog,
+            text=title,
+            font=ctk.CTkFont(size=12),
+            text_color="gray",
+            wraplength=420,
+        ).pack(pady=(0, 10))
+
+        btn_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        btn_frame.pack(pady=(0, 15))
+
+        def _do_delete():
+            try:
+                self.db.delete_article(article_id)
+                self._last_count = -1
+                self.refresh(force=True)
+                dialog.destroy()
+            except Exception as e:
+                print(f"Error deleting article {article_id}: {e}")
+
+        ctk.CTkButton(btn_frame, text="Delete", width=100,
+                      fg_color=("#F44336", "#D32F2F"),
+                      hover_color=("#E53935", "#C62828"),
+                      command=_do_delete).pack(side="left", padx=10)
+        ctk.CTkButton(btn_frame, text="Cancel", width=100,
+                      command=dialog.destroy).pack(side="left", padx=10)
 
     def _set_feedback(self, article_id: int, feedback: str,
                       like_btn, dislike_btn):

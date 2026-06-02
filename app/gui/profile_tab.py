@@ -106,7 +106,9 @@ class ProfileTab:
             read_only=False,
             on_change=self._on_pills_changed,
         )
-        self._kw_pills.pack(fill="x", pady=(0, 4))
+        # Only pack if there are keywords; otherwise it wastes space
+        if init_kws:
+            self._kw_pills.pack(fill="x", pady=(0, 2))
 
         self.keywords_entry = KeywordEntry(
             self.scroll,
@@ -209,10 +211,20 @@ class ProfileTab:
         current = self._kw_pills.get_items()
         if keyword not in current:
             self._kw_pills.set_items(current + [keyword])
+            # Ensure PillFrame is packed when keywords are added
+            if not self._kw_pills.winfo_manager():  # if not packed
+                self._kw_pills.pack(fill="x", pady=(0, 2), before=self.keywords_entry)
 
     def _on_pills_changed(self, new_items: list):
-        """Called when a pill is removed — nothing to do, pills are source of truth."""
-        pass
+        """Called when a pill is removed — show/hide the pill frame based on content."""
+        if new_items:
+            # Show pills frame if it has items
+            if not self._kw_pills.winfo_manager():  # if not packed
+                self._kw_pills.pack(fill="x", pady=(0, 2), before=self.keywords_entry)
+        else:
+            # Hide pills frame if empty
+            if self._kw_pills.winfo_manager():  # if packed
+                self._kw_pills.pack_forget()
 
     def save_to_config(self):
         """Save current values to config."""

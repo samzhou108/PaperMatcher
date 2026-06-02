@@ -116,12 +116,12 @@ First launch opens a 3-step onboarding screen (Profile → PubMed Settings → L
 
 ### Pass 1 — Screening (local, always free)
 
-| Model             | Size        | Notes                                                                        |
-| ----------------- | ----------- | ---------------------------------------------------------------------------- |
-| `llama3.2:latest` | 3B / 2.0 GB | **Recommended.** 100% recall on 92-paper benchmark at ~0.3s/paper.          |
-| `gemma3:4b`       | 4B / 3.3 GB | 93% recall — usable but misses more papers than llama3.2.                   |
-| `mistral:7b`      | 7B / 4.4 GB | 100% recall but 6× slower than llama3.2 with no benefit for a yes/no task.  |
-| `llama3.1:8b`     | 8B / 4.9 GB | 100% recall but 6× slower than llama3.2 with no benefit for a yes/no task.  |
+| Model             | Size        | Notes                                                                      |
+| ----------------- | ----------- | -------------------------------------------------------------------------- |
+| `llama3.2:latest` | 3B / 2.0 GB | **Recommended.** 100% recall on 92-paper benchmark at ~0.3s/paper.         |
+| `gemma3:4b`       | 4B / 3.3 GB | 93% recall — usable but misses more papers than llama3.2.                  |
+| `mistral:7b`      | 7B / 4.4 GB | 100% recall but 6× slower than llama3.2 with no benefit for a yes/no task. |
+| `llama3.1:8b`     | 8B / 4.9 GB | 100% recall but 6× slower than llama3.2 with no benefit for a yes/no task. |
 
 Models above ~5 GB are not recommended — they slow screening significantly on consumer hardware. No model tested improved on `llama3.2:latest` for this task.
 
@@ -131,8 +131,8 @@ Models above ~5 GB are not recommended — they slow screening significantly on 
 
 **Best free option:**
 
-| Model                             | Notes                                                                                      |
-| --------------------------------- | ------------------------------------------------------------------------------------------ |
+| Model                             | Notes                                                                                     |
+| --------------------------------- | ----------------------------------------------------------------------------------------- |
 | `deepseek/deepseek-v4-flash:free` | No prompt training required, but no "Zero Data Retention" (ZDR) policy. Fast, 1M context. |
 
 No training on prompt data can be enabled in OpenRouter > Guardrails > Model & Provider Access
@@ -157,11 +157,11 @@ No training on prompt data can be enabled in OpenRouter > Guardrails > Model & P
 
 Set API Base URL to `http://localhost:11434` and enter any Ollama model name. No API key, no rate limit, fully offline.
 
-| Model             | Size        | Threshold | E2E   | Irr pass-through | Notes                                      |
-| ----------------- | ----------- | --------- | ----- | ---------------- | ------------------------------------------ |
-| `llama3.2:latest` | 3B / 2.0 GB | t=6       | 98%   | 67%              | **Best local recall.** High noise to review. |
-| `granite3.3:8b`   | 8B / 4.9 GB | t=3       | 88%   | 33%              | Best local precision. Matches cloud noise level, 3× slower. Pull: `ollama pull granite3.3:8b` |
-| `gemma3:4b`       | 4B / 3.3 GB | t=6       | 91%   | 67%              | Fast, but no advantage over llama3.2 locally. |
+| Model             | Size        | Threshold | E2E | Irr pass-through | Notes                                                                                         |
+| ----------------- | ----------- | --------- | --- | ---------------- | --------------------------------------------------------------------------------------------- |
+| `llama3.2:latest` | 3B / 2.0 GB | t=6       | 98% | 67%              | **Best local recall.** High noise to review.                                                  |
+| `granite3.3:8b`   | 8B / 4.9 GB | t=3       | 88% | 33%              | Best local precision. Matches cloud noise level, 3× slower. Pull: `ollama pull granite3.3:8b` |
+| `gemma3:4b`       | 4B / 3.3 GB | t=6       | 91% | 67%              | Fast, but no advantage over llama3.2 locally.                                                 |
 
 ---
 
@@ -230,11 +230,11 @@ No server, no setup. `~/.papermatcher/papermatcher.db` is a single file you can 
 
 **Benchmark results (92-paper test set, 7 Pass 1 and 5 Pass 2 models evaluated):**
 
-| Config | Threshold | E2E Recall | Irr. pass-through | Time |
-| ------ | --------- | ---------- | ----------------- | ---- |
-| llama3.2 P1 + **DeepSeek P2** (cloud) | t=4 | 86% | 33% | ~4.4 min |
-| **llama3.2 both** (local) | t=6 | **98%** | 67% | ~5.4 min |
-| llama3.2 P1 + granite3.3:8b P2 (local) | t=3 | 88% | 33% | ~15 min |
+| Config                                 | Threshold | E2E Recall | Irr. pass-through | Time     |
+| -------------------------------------- | --------- | ---------- | ----------------- | -------- |
+| llama3.2 P1 + **DeepSeek P2** (cloud)  | t=4       | 86%        | 33%               | ~4.4 min |
+| **llama3.2 both** (local)              | t=6       | **98%**    | 67%               | ~5.4 min |
+| llama3.2 P1 + granite3.3:8b P2 (local) | t=3       | 88%        | 33%               | ~15 min  |
 
 All configs use `llama3.2:latest` for Pass 1 (100% recall on this dataset, ~0.3s/paper). No other local model improved on it — larger models matched recall but were 6× slower.
 
@@ -246,11 +246,11 @@ All configs use `llama3.2:latest` for Pass 1 (100% recall on this dataset, ~0.3s
 
 Everything in `~/.papermatcher/` — nothing leaves your machine except the Pass 2 API calls you configure.
 
-| File                 | Contents                                    |
-| -------------------- | ------------------------------------------- |
-| `config.json`        | Settings and research profile               |
-| `papermatcher.db`    | Saved articles, rejection history, run logs |
-| `mesh_cache.json`    | Cached NCBI MeSH term lookups               |
+| File              | Contents                                    |
+| ----------------- | ------------------------------------------- |
+| `config.json`     | Settings and research profile               |
+| `papermatcher.db` | Saved articles, rejection history, run logs |
+| `mesh_cache.json` | Cached NCBI MeSH term lookups               |
 
 No telemetry. Pass 1 screening is always local.
 

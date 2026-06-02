@@ -9,19 +9,83 @@ import customtkinter as ctk
 
 
 KEYWORD_SUGGESTIONS = [
-    "neuroinflammation", "neuropathic pain", "neuronal regeneration",
-    "neurodegeneration", "axonal injury", "synaptic plasticity",
-    "bone marrow stem cells", "mesenchymal stem cells", "stem cell therapy",
-    "induced pluripotent stem cells", "hematopoietic stem cells",
+    # Immunology & immune therapy
     "T cell", "B cell", "macrophage", "cytokine", "innate immunity",
-    "adaptive immunity", "inflammation", "immunotherapy",
-    "regulatory T cells", "NK cells", "dendritic cells",
+    "adaptive immunity", "inflammation", "immunotherapy", "vaccine",
+    "regulatory T cells", "NK cells", "dendritic cells", "B7 molecules",
+    "checkpoint inhibitor", "CAR-T", "antigen presentation", "MHC",
+    "complement system", "toll-like receptor", "interferon", "interleukin",
+    # Stem cells & regenerative medicine
+    "stem cell therapy", "bone marrow stem cells", "mesenchymal stem cells",
+    "induced pluripotent stem cells", "hematopoietic stem cells",
+    "tissue engineering", "regenerative medicine", "cell transplantation",
+    "organoid", "differentiation", "self-renewal",
+    # Neuroscience & neurobiology
+    "neurodegeneration", "neuronal plasticity", "synaptic transmission",
+    "neurotrophic factor", "neural stem cell", "brain-derived neurotrophic factor",
+    "axon", "dendrite", "astrocyte", "oligodendrocyte", "synapse",
+    "neurotransmitter", "neuropathy", "neuroinflammation", "brain",
+    # Molecular & genomic
     "single-cell RNA-seq", "epigenetics", "CRISPR", "gene expression",
     "chromatin remodeling", "DNA methylation", "histone modification",
-    "cancer immunology", "tumor microenvironment", "clinical trial",
-    "checkpoint inhibitor", "CAR-T", "metastasis",
-    "microglia", "astrocytes", "oligodendrocytes", "blood-brain barrier",
-    "pain signaling", "nociception", "spinal cord injury",
+    "transcriptomics", "proteomics", "metagenomics", "whole genome sequencing",
+    "gene regulation", "non-coding RNA", "microRNA", "long non-coding RNA",
+    # Cancer biology & oncology
+    "cancer immunology", "tumor microenvironment", "metastasis",
+    "cancer metabolism", "drug resistance", "personalized medicine",
+    "oncogene", "tumor suppressor", "apoptosis", "cell cycle",
+    # Developmental biology & embryology
+    "embryo", "development", "morphogenesis", "cell migration",
+    "developmental signaling", "axis formation", "pattern formation",
+    "organogenesis", "cell fate", "stem cell niche",
+    # Infectious diseases & microbiology
+    "bacteria", "virus", "fungus", "parasite", "pathogenesis",
+    "antibiotic resistance", "vaccine development", "infection",
+    "host-pathogen interaction", "microbiome", "viral entry",
+    # Physiology & metabolism
+    "glucose metabolism", "fatty acid oxidation", "mitochondria",
+    "metabolic syndrome", "obesity", "energy homeostasis",
+    "circadian rhythm", "hormone", "endocrine", "pancreas",
+    "liver metabolism", "kidney", "cardiovascular",
+    # Cardiovascular research
+    "heart", "hypertension", "atherosclerosis", "myocardial infarction",
+    "cardiac regeneration", "angiogenesis", "vascular biology",
+    # Structural biology & biophysics
+    "protein structure", "X-ray crystallography", "cryo-EM", "NMR",
+    "protein folding", "molecular dynamics", "structure-function",
+    # Plant biology & botany
+    "plant", "photosynthesis", "agriculture", "plant immunity",
+    "plant hormone", "plant development", "crop improvement",
+    # Ecology & environmental science
+    "ecology", "conservation", "biodiversity", "climate change",
+    "environmental toxicology", "ecosystem", "population dynamics",
+    # Molecular pathways & signaling
+    "signal transduction", "apoptosis", "oxidative stress", "autophagy",
+    "protein misfolding", "ubiquitination", "phosphorylation",
+    "Wnt signaling", "TGF-beta", "Notch", "Hedgehog",
+    # Drug discovery & therapeutic approaches
+    "monoclonal antibody", "gene therapy", "drug delivery", "small molecule",
+    "biologics", "precision medicine", "targeted therapy", "combination therapy",
+    "drug screening", "pharmaceutical", "pharmacokinetics",
+    # Aging & longevity
+    "aging", "senescence", "longevity", "age-related disease",
+    "gerontology", "lifespan", "healthspan",
+    # Behavioral science
+    "behavior", "neurobehavior", "learning", "memory", "cognition",
+    "brain function", "neural circuit", "addiction", "psychiatric disorder",
+    # Synthetic biology & bioengineering
+    "synthetic biology", "genetic engineering", "metabolic engineering",
+    "bioengineering", "cell engineering", "biofuel",
+    # Evolution & systematics
+    "evolution", "phylogenetics", "comparative biology", "adaptation",
+    # Nutrition & metabolism disorders
+    "nutrition", "dietary", "metabolomics", "lipidome", "metabolic disorder",
+    # Bioinformatics & computational biology
+    "bioinformatics", "systems biology", "mathematical biology",
+    "computational biology", "machine learning in biology",
+    # Clinical research
+    "clinical trial", "patient", "diagnosis", "prognosis", "biomarker",
+    "personalized treatment", "clinical outcome",
 ]
 
 

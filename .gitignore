@@ -9,6 +9,8 @@ __pycache__/
 dist/
 build/work/
 *.spec
+!PaperMatcher.spec
+!PaperMatcher-windows.spec
 
 # macOS
 .DS_Store

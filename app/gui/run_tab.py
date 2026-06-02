@@ -649,7 +649,7 @@ class RunTab:
         return "\n".join(parts)
 
     def _update_query_preview(self, *_):
-        """Repopulate the editable query preview from profile keywords.
+        """Repopulate the editable query preview from profile keywords and advanced terms.
 
         Skipped if the user has already manually edited the preview.
         """
@@ -660,10 +660,18 @@ class RunTab:
         self._query_edited_label.configure(text="")
 
         keywords = self.config.profile.keywords or []
-        if not keywords:
+        advanced = self._parse_advanced_terms() if self._advanced_search_active else {}
+        has_keywords = bool(keywords)
+        has_advanced = bool(
+            advanced.get("must_include") or
+            advanced.get("include_to_expand") or
+            advanced.get("do_not_include")
+        )
+
+        if not has_keywords and not has_advanced:
             self._query_preview_box.configure(state="normal")
             self._query_preview_box.delete("1.0", "end")
-            self._query_preview_box.insert("1.0", "(no keywords configured in Profile)")
+            self._query_preview_box.insert("1.0", "(no keywords configured — use Profile tab or Advanced Search)")
             self._query_preview_box.configure(state="disabled")
             self._mesh_note_label.configure(text="")
             self._query_warn_label.configure(text="")
@@ -904,7 +912,7 @@ class RunTab:
         except Exception as e:
             logger.warning("Failed to reset stop_btn: %s", e)
         try:
-            self._generate_btn.configure(state="normal")
+            self._generate_btn.configure(state="normal", text="✨ Generate")
         except Exception:
             pass
         self.status_label.configure(text="Ready", text_color="gray")
@@ -1000,7 +1008,7 @@ class RunTab:
 
         self.run_btn.configure(state="disabled", text="Running...")
         self.stop_btn.configure(state="normal")
-        self._generate_btn.configure(state="disabled")
+        self._generate_btn.configure(state="disabled", text="⏳ Pipeline running")
         self.progress.set(0)
         self._update_query_preview()
 
@@ -1033,20 +1041,14 @@ class RunTab:
         self.pipeline_thread.start()
 
     def _stop_pipeline(self):
-        """Signal the pipeline to stop. Second click resets UI but keeps stop flag."""
+        """Signal the pipeline to stop gracefully."""
         if self._stop_flag:
-            # Second click: already requested stop, just reset UI
-            # The pipeline will exit when it checks _stop_flag on next iteration
-            self.is_running = False
-            self.run_btn.configure(state="normal", text="Run Pipeline")
-            self.stop_btn.configure(state="disabled", text="Stop")
-            self._generate_btn.configure(state="normal")
-            self.status_label.configure(text="Stopping...", text_color="#FF9800")
-            self._log("Force stop requested. Waiting for current operation to finish...", "warning")
+            # Already stopping — ignore repeated clicks
             return
         self._stop_flag = True
-        self._log("Stop requested — will stop after current API call (click again to reset UI).", "warning")
-        self.stop_btn.configure(text="Force Stop")  # keep enabled for second click
+        self._log("Stop requested — pipeline will exit after current operation finishes.", "warning")
+        self.status_label.configure(text="Stopping...", text_color="#FF9800")
+        self.stop_btn.configure(state="disabled", text="Stopping...")  # disable further clicks
 
     def _run_pipeline(self):
         # Attach a handler that forwards pipeline module logs to the live log.
@@ -1078,11 +1080,28 @@ class RunTab:
 
             self.master.after(0, lambda: self.progress.set(0.05))
 
-            # Step 2: Check Ollama availability (Pass 1 screening)
+            # Step 2: Check Ollama availability (Pass 1 screening and Pass 2 scoring)
             ollama_ok = self._check_ollama()
             if not ollama_ok:
-                self._log("WARNING: Ollama not available. Pass 1 screening disabled — all articles go straight to Pass 2 scoring.", "warning")
-                self.master.after(0, lambda: self.status_label.configure(text="Ollama unavailable — screening disabled"))
+                self._log("", "error")  # blank line for visibility
+                self._log("⚠️  OLLAMA NOT RUNNING", "error")
+
+                # If Pass 2 is also local (llama3.2), pipeline cannot run
+                is_pass2_local = self.config.llm.scoring_model != "cloud"
+                if is_pass2_local:
+                    self._log("❌ PIPELINE CANNOT RUN: Ollama is required for Pass 2 scoring but is offline.", "error")
+                    self._log("Either start Ollama or configure a cloud model for Pass 2 scoring.", "error")
+                    self._log("Command: ollama run llama3.2:latest", "error")
+                    self._log("", "error")
+                    self.master.after(0, lambda: self.status_label.configure(text="❌ Ollama offline", text_color="#D32F2F"))
+                    return
+                else:
+                    # Pass 2 is cloud, so only Pass 1 screening is disabled
+                    self._log("Pass 1 screening is DISABLED. All articles will be scored by cloud model only.", "error")
+                    self._log("To use Pass 1 screening: start Ollama and ensure llama3.2:latest is installed.", "error")
+                    self._log("Command: ollama run llama3.2:latest", "error")
+                    self._log("", "error")
+                    self.master.after(0, lambda: self.status_label.configure(text="⚠️  Ollama offline", text_color="#FF5722"))
             else:
                 self._log("Ollama detected — Pass 1 screening enabled")
 
@@ -1099,6 +1118,7 @@ class RunTab:
             keywords = self.config.profile.keywords or self._derived_keywords
             must_include = self._advanced_terms.get("must_include", [])
             include_to_expand = self._advanced_terms.get("include_to_expand", [])
+            do_not_include = self._advanced_terms.get("do_not_include", [])
 
             # If no broad OR-keywords yet but must_include terms exist, use
             # them for the OR block too.  The scraper returns early when the OR
@@ -1107,8 +1127,13 @@ class RunTab:
             if not keywords and must_include:
                 keywords = list(must_include)
 
-            if not keywords and not self._query_user_edited:
-                self._log("No keywords configured. Please add keywords in the Profile tab.", "warning")
+            # Allow pipeline if:
+            # 1. Keywords exist (from profile or derived from include_to_expand)
+            # 2. User has manually edited the query, OR
+            # 3. Advanced search terms are filled (must_include, include_to_expand, do_not_include)
+            has_advanced_terms = bool(must_include or include_to_expand or do_not_include)
+            if not keywords and not self._query_user_edited and not has_advanced_terms:
+                self._log("No keywords configured. Please add keywords in the Profile tab or use Advanced Search.", "warning")
                 self.master.after(0, lambda: self.status_label.configure(text="No keywords"))
                 return
 
@@ -1234,7 +1259,10 @@ class RunTab:
                 article_data["title"] = content.get("title", article_data.get("title", ""))
 
                 # Score article (includes Pass 1 screening + Pass 2 scoring)
-                self._log(f"    Scoring with Pass 2...")
+                if not ollama_ok:
+                    self._log(f"    Scoring (Pass 1 screening disabled due to Ollama offline)...")
+                else:
+                    self._log(f"    Scoring with Pass 2...")
                 try:
                     score, reason = scorer.score_article(
                         profile,
@@ -1247,6 +1275,12 @@ class RunTab:
                     if score == 1 and ollama_ok:
                         stats["screened_out"] += 1
                         self._log(f"    Pass 1: screened out (not relevant)")
+                        self.master.after(0, lambda: self._update_stats(**stats))
+                        continue
+                    elif score == 1 and not ollama_ok:
+                        # Score is 1/10 but Ollama is offline — explain this is Pass 1 disabled
+                        stats["screened_out"] += 1
+                        self._log(f"    Pass 1 disabled (Ollama offline): skipping article with low relevance")
                         self.master.after(0, lambda: self._update_stats(**stats))
                         continue
                 except PipelineStoppedException:
@@ -1459,16 +1493,26 @@ class RunTab:
     def _validate_config(self) -> bool:
         errors = []
 
+        # Check for keywords from profile, derived from advanced search, or user-edited query
         has_keywords = (
             self.config.profile.keywords
             or self._derived_keywords
             or self._query_user_edited
         )
-        if not has_keywords:
+
+        # Also check if advanced search terms are provided (must_include, include_to_expand, do_not_include)
+        advanced = self._parse_advanced_terms() if self._advanced_search_active else {}
+        has_advanced_terms = bool(
+            advanced.get("must_include")
+            or advanced.get("include_to_expand")
+            or advanced.get("do_not_include")
+        )
+
+        if not has_keywords and not has_advanced_terms:
             errors.append(
                 "Keywords not configured. "
                 "Add keywords in the Profile tab, fill in Run Focus / structured "
-                "search terms, or edit the query preview directly."
+                "search terms, use Advanced Search, or edit the query preview directly."
             )
 
         if not self.config.llm.model:
