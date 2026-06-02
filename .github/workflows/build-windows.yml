@@ -1,0 +1,47 @@
+name: Build Windows
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build with PyInstaller
+        run: pyinstaller PaperMatcher-windows.spec
+
+      - name: Zip build output
+        run: Compress-Archive -Path dist\PaperMatcher -DestinationPath dist\PaperMatcher-windows.zip
+        shell: pwsh
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PaperMatcher-windows
+          path: dist/PaperMatcher-windows.zip
+          retention-days: 30
+
+      # Only runs when a version tag (e.g. v1.0.1) is pushed
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/PaperMatcher-windows.zip
+          generate_release_notes: true
