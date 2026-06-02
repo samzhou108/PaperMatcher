@@ -46,10 +46,11 @@ DEFAULT_JOURNALS = [
 class OnboardingWizard:
     """3-step onboarding wizard: Profile -> PubMed -> LLM."""
 
-    def __init__(self, master: ctk.CTk, on_complete: Callable[[AppConfig], None]):
+    def __init__(self, master: ctk.CTk, on_complete: Callable[[AppConfig], None],
+                 initial_config: AppConfig = None):
         self.master = master
         self.on_complete = on_complete
-        self.config = AppConfig()
+        self.config = initial_config if initial_config is not None else AppConfig()
         self.current_step = 0
 
         self.window = ctk.CTkToplevel(master)

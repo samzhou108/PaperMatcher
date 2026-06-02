@@ -4,6 +4,7 @@ PaperMatcher - macOS Desktop Application Entry Point
 Searches PubMed database, scores articles against research profile, and tracks results.
 """
 
+import json
 import os
 import sys
 import platform
@@ -27,6 +28,30 @@ CONFIG_PATH = CONFIG_DIR / "config.json"
 def is_first_run() -> bool:
     """Check if this is the first run (no config file exists)."""
     return not CONFIG_PATH.exists()
+
+
+def _bundle_base() -> Path:
+    """Return the base directory for bundled resources (works frozen and from source)."""
+    if getattr(sys, 'frozen', False):
+        return Path(sys._MEIPASS)
+    return Path(__file__).parent
+
+
+def _load_bundled_config():
+    """Return a pre-seeded AppConfig if app/bundled_config.json is present, else None."""
+    path = _bundle_base() / "app" / "bundled_config.json"
+    if not path.exists():
+        return None
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        config = AppConfig()
+        for key, val in data.get("llm", {}).items():
+            if hasattr(config.llm, key):
+                setattr(config.llm, key, val)
+        return config
+    except Exception:
+        return None
 
 
 def setup_config_dir():
@@ -60,8 +85,10 @@ def main():
     root.geometry(f"{width}x{height}+{x}+{y}")
 
     if is_first_run():
-        # Launch onboarding wizard
-        wizard = OnboardingWizard(root, on_complete=lambda config: launch_main(root, config))
+        # Launch onboarding wizard, pre-seeded if a bundled config is present
+        initial_config = _load_bundled_config()
+        wizard = OnboardingWizard(root, on_complete=lambda config: launch_main(root, config),
+                                  initial_config=initial_config)
         wizard.grab_set()
     else:
         # Load existing config and launch main app

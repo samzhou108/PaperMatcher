@@ -12,6 +12,9 @@ build/work/
 !PaperMatcher.spec
 !PaperMatcher-windows.spec
 
+# Pre-configured build defaults — never commit (contains API keys)
+app/bundled_config.json
+
 # macOS
 .DS_Store
 
