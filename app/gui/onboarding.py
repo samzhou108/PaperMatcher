@@ -68,6 +68,11 @@ class OnboardingWizard:
         y = (self.window.winfo_screenheight() // 2) - 325
         self.window.geometry(f"700x650+{x}+{y}")
 
+        # On Windows, CTkToplevel can sink behind the main window when the user
+        # alt-tabs away. Re-lift whenever the main window regains focus.
+        self.master.bind("<FocusIn>", self._lift, add="+")
+        self.window.bind("<FocusIn>", self._lift, add="+")
+
         self._build_ui()
 
     def _build_ui(self):
@@ -630,6 +635,14 @@ class OnboardingWizard:
             self.config.llm.screening_model = "local"
             self.config.llm.screening_model_name = SCREENER_LOCAL_MODEL
 
+    def _lift(self, _event=None):
+        """Bring the onboarding window to the front (Windows focus fix)."""
+        try:
+            self.window.lift()
+            self.window.focus_force()
+        except Exception:
+            pass
+
     def _on_close(self):
         """Handle close button (X) — save current config and launch main app."""
         self._save_current_step()
@@ -637,6 +650,7 @@ class OnboardingWizard:
 
     def _finish(self):
         """Complete onboarding."""
+        self.master.unbind("<FocusIn>")
         self.config.save()
         self.window.destroy()
         self.on_complete(self.config)
