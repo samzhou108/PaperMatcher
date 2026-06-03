@@ -1,11 +1,11 @@
 <div align="center">
 
-```
-  📄 ──── ❤️  ──── 📄
-     P A P E R
-   M A T C H E R
-  📄 ──── ✖️  ──── 📄
-```
+<p>
+<code>📄 ──── ❤️  ──── 📄</code><br>
+<code>&nbsp;&nbsp; P &nbsp;A &nbsp;P &nbsp;E &nbsp;R</code><br>
+<code>&nbsp;M A T C H E R</code><br>
+<code>📄 ──── ✖️  ──── 📄</code>
+</p>
 
 ### *Like Tinder, but for journal articles*
 
