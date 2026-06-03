@@ -31,19 +31,22 @@ jobs:
         run: pyinstaller PaperMatcher-windows.spec
 
       - name: Zip build output
-        run: Compress-Archive -Path dist\PaperMatcher -DestinationPath dist\PaperMatcher-windows.zip
+        run: |
+          $version = if ($env:GITHUB_REF -like 'refs/tags/v*') { $env:GITHUB_REF_NAME } else { 'dev' }
+          Compress-Archive -Path dist\PaperMatcher -DestinationPath "dist\PaperMatcher-windows-$version.zip"
+          echo "ZIP_NAME=PaperMatcher-windows-$version.zip" >> $env:GITHUB_ENV
         shell: pwsh
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: PaperMatcher-windows
-          path: dist/PaperMatcher-windows.zip
+          name: PaperMatcher-windows-${{ env.ZIP_NAME }}
+          path: dist/${{ env.ZIP_NAME }}
           retention-days: 30
 
-      # Only runs when a version tag (e.g. v1.0.1) is pushed
+      # Only runs when a version tag (e.g. v1.1.0) is pushed
       - name: Upload to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/PaperMatcher-windows.zip
+          files: dist/${{ env.ZIP_NAME }}
