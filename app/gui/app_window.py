@@ -57,6 +57,21 @@ class AppWindow:
         )
         save_btn.pack(side="right")
 
+        # Theme toggle
+        _mode = ctk.get_appearance_mode()
+        self._theme_btn = ctk.CTkButton(
+            header,
+            text="☀ Light" if _mode == "Dark" else "🌙 Dark",
+            width=85,
+            height=28,
+            font=ctk.CTkFont(size=12),
+            fg_color=("gray75", "gray30"),
+            hover_color=("gray65", "gray40"),
+            text_color=("gray20", "gray90"),
+            command=self._toggle_theme,
+        )
+        self._theme_btn.pack(side="right", padx=(0, 10))
+
         # Separator
         sep = ctk.CTkFrame(self.master, height=2, fg_color="gray75")
         sep.pack(fill="x", padx=20, pady=5)
@@ -168,3 +183,9 @@ class AppWindow:
             command=dialog.destroy,
             width=100,
         ).pack(pady=10)
+
+    def _toggle_theme(self):
+        """Toggle between light and dark appearance mode."""
+        new_mode = "Light" if ctk.get_appearance_mode() == "Dark" else "Dark"
+        ctk.set_appearance_mode(new_mode)
+        self._theme_btn.configure(text="☀ Light" if new_mode == "Dark" else "🌙 Dark")

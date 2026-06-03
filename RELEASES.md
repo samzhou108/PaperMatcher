@@ -1,5 +1,43 @@
 # PaperMatcher Releases
 
+## v1.1.0 (2026-06-03)
+
+**Release Type:** Feature update + light mode
+
+### What's New
+
+✅ **Light Mode Support:**
+- Full light/dark mode — app now adapts to macOS system appearance
+- Light/dark toggle button in the header (top right)
+- Fixed all hardcoded dark backgrounds across Run Pipeline, Settings, and Edit dialog tabs
+
+✅ **Citation Export:**
+- Export citations in RIS, BibTeX, NBIB, and ENW formats
+- Per-article "Cite" button in Results tab
+- Batch "Export Citations" toolbar button
+
+✅ **Build Improvements:**
+- Quarantine attribute auto-stripped on build (no Gatekeeper badge)
+- Spec file auto-reads version from `app/version.py` (version can never drift)
+- DMG auto-created as part of `pyinstaller PaperMatcher.spec`
+
+### Bug Fixes
+- Fixed Run Pipeline tab rendering black panels in light mode
+- Fixed "Suggested Setup" button near-invisible in light mode
+- Fixed "Use" model buttons invisible when disabled in light mode
+- Fixed Tags horizontal scrollbar showing black background in Edit dialog
+- Fixed context textbox text invisible after focus in light mode
+
+### Updated Model Recommendations (June 2026)
+
+| Config | E2E @t=4 | Cost/run |
+|---|---|---|
+| deepseek/deepseek-v4-flash (recommended) | 83.7% | ~$0.007 |
+| inclusionai/ling-2.6-1t (backup) | 81.4% | ~$0.008 |
+| openrouter/owl-alpha (free) | 79.1% | $0.00 |
+
+---
+
 ## v1.0.0 (2026-05-27)
 
 **Release Type:** Initial stable release
@@ -58,13 +96,13 @@ python3 main.py
 ### Known Limitations
 
 - **macOS only** — Windows/Linux support deferred to future release
-- **Light mode** — Not yet implemented (dark mode only)
+- **Light mode** — Fixed in v1.1.0
 - **Segfault post-review** — Rare edge case, traceback logging added for debugging
 - **Trackpad scrolling** — CTk 5.2.2 has clunky trackpad behavior (CTk >5.2.2 should fix)
 
 ### What's Next (Roadmap)
 
-- [ ] Citation export (RIS, BibTeX, NBIB, ENW)
+- [x] Citation export (RIS, BibTeX, NBIB, ENW) — v1.1.0
 - [ ] Journal RSS monitoring (ahead-of-print feeds)
 - [ ] Iterative profile enhancement from saved articles
 - [ ] Keyword-based tagging and sorting

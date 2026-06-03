@@ -74,13 +74,15 @@ All tested with `llama3.2:latest` Pass 1, using `--reuse-pass1`. Results evaluat
 
 ## Recommended configs
 
-| Use case | P1 | P2 | Threshold | E2E | Irr pass-through | Time |
-|---|---|---|---|---|---|---|
-| **Cloud (recommended)** | llama3.2 | deepseek/deepseek-v4-flash:free | t=4 | 86% | 33% | ~4.4m |
-| **Local, max recall** | llama3.2 | llama3.2 | t=6 | 98% | 67% | ~5.4m |
-| **Local, less noise** | llama3.2 | granite3.3:8b | t=3 | 88% | 33% | ~15m |
+| Use case | P1 | P2 | Threshold | E2E | Cost/92 papers |
+|---|---|---|---|---|---|
+| **Cloud default** | llama3.2 | deepseek/deepseek-v4-flash | t=4 | 83.7% | ~$0.007 |
+| **Cloud backup** | llama3.2 | inclusionai/ling-2.6-1t | t=4 | 81.4% | ~$0.008 |
+| **Cloud free** | llama3.2 | openrouter/owl-alpha | t=4 | 79.1% | $0.00 |
+| **Local, max recall** | llama3.2 | llama3.2 | t=6 | 97.7% | $0.00 |
+| **Local, less noise** | llama3.2 | granite3.3:8b | t=3 | 88.0% | $0.00 |
 
-The cloud config is recommended as the default. The local max-recall config (llama3.2 both) is the best fully-offline option — its 98% E2E at t=6 is the highest of any config tested, at the cost of more irrelevant papers reaching the human review queue. The granite config matches cloud precision but is 3× slower.
+deepseek-v4-flash is the benchmark champion across all configs tested (Rounds 1–3). ling-2.6-1t is a near-equivalent paid backup. owl-alpha is the best free option. Full cloud model survey results (20+ models tested June 2026) are in `progress_tracking/model_test_results.md`.
 
 ---
 

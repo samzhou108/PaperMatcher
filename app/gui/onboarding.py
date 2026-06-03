@@ -310,6 +310,13 @@ class OnboardingWizard:
             text="Configure which journals and keywords to monitor:",
             font=ctk.CTkFont(size=11),
             text_color="gray",
+        ).pack(anchor="w", pady=(0, 4))
+
+        ctk.CTkLabel(
+            self.content,
+            text="Note: real-time journal alerts via RSS are coming in a future update.",
+            font=ctk.CTkFont(size=11),
+            text_color="#F5A623",
         ).pack(anchor="w", pady=(0, 10))
 
         # Default journals to monitor

@@ -5,8 +5,6 @@ import subprocess
 import sys
 from datetime import datetime
 from tkinter import filedialog
-from tkinter import ttk
-import tkinter
 
 import customtkinter as ctk
 
@@ -77,6 +75,17 @@ class ResultsTab:
             hover_color=("gray65", "gray40"),
             text_color=("black", "white"),
             command=self._export_csv,
+        ).pack(side="right", padx=(4, 0))
+
+        ctk.CTkButton(
+            bar,
+            text="Export Citations",
+            width=115,
+            height=28,
+            fg_color=("gray75", "gray30"),
+            hover_color=("gray65", "gray40"),
+            text_color=("black", "white"),
+            command=self._export_citations,
         ).pack(side="right", padx=(4, 0))
 
         # Review Skipped button
@@ -506,6 +515,18 @@ class ResultsTab:
 
         ctk.CTkButton(
             btn_row,
+            text="Cite",
+            width=45,
+            height=22,
+            font=ctk.CTkFont(size=10),
+            fg_color=("gray75", "gray30"),
+            hover_color=("gray65", "gray40"),
+            text_color=("black", "white"),
+            command=lambda a=article: self._export_single_citation(a),
+        ).pack(side="right", padx=(2, 4))
+
+        ctk.CTkButton(
+            btn_row,
             text="Edit",
             width=55,
             height=22,
@@ -718,6 +739,241 @@ class ResultsTab:
         except Exception as e:
             print(f"Export error: {e}")
 
+    def _export_citations(self):
+        """Show format picker then export all saved articles as a citation file."""
+        articles = self.db.get_all_processed(limit=10000)
+        if not articles:
+            return
+
+        dialog = ctk.CTkToplevel(self.master)
+        dialog.title("Export Citations")
+        dialog.geometry("300x220")
+        dialog.transient(self.master)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+
+        ctk.CTkLabel(
+            dialog, text="Select citation format:",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(pady=(16, 8))
+
+        fmt_var = ctk.StringVar(value="ris")
+        for label, val in [
+            ("RIS (.ris)  — Zotero, Mendeley, EndNote", "ris"),
+            ("BibTeX (.bib)  — LaTeX", "bib"),
+            ("NBIB (.nbib)  — PubMed native", "nbib"),
+            ("EndNote Web (.enw)", "enw"),
+        ]:
+            ctk.CTkRadioButton(dialog, text=label, variable=fmt_var, value=val).pack(anchor="w", padx=24, pady=2)
+
+        chosen = {"fmt": None}
+
+        def _ok():
+            chosen["fmt"] = fmt_var.get()
+            dialog.destroy()
+
+        ctk.CTkButton(dialog, text="Export", command=_ok, width=100).pack(pady=(12, 0))
+        dialog.wait_window()
+
+        fmt = chosen["fmt"]
+        if not fmt:
+            return
+
+        ext_map = {"ris": ".ris", "bib": ".bib", "nbib": ".nbib", "enw": ".enw"}
+        type_map = {"ris": "RIS files", "bib": "BibTeX files", "nbib": "NBIB files", "enw": "EndNote Web files"}
+        path = filedialog.asksaveasfilename(
+            defaultextension=ext_map[fmt],
+            filetypes=[(type_map[fmt], f"*{ext_map[fmt]}"), ("All files", "*.*")],
+            initialfile=f"papermatcher_export{ext_map[fmt]}",
+        )
+        if not path:
+            return
+
+        formatters = {
+            "ris": self._format_ris,
+            "bib": self._format_bibtex,
+            "nbib": self._format_nbib,
+            "enw": self._format_enw,
+        }
+        try:
+            content = formatters[fmt](articles)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+        except Exception as e:
+            print(f"Citation export error: {e}")
+
+    def _export_single_citation(self, article: dict):
+        """Show format picker then export a single article as a citation file."""
+        dialog = ctk.CTkToplevel(self.master)
+        dialog.title("Export Citation")
+        dialog.geometry("300x220")
+        dialog.transient(self.master)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+
+        ctk.CTkLabel(
+            dialog, text="Select citation format:",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(pady=(16, 8))
+
+        fmt_var = ctk.StringVar(value="ris")
+        for label, val in [
+            ("RIS (.ris)  — Zotero, Mendeley, EndNote", "ris"),
+            ("BibTeX (.bib)  — LaTeX", "bib"),
+            ("NBIB (.nbib)  — PubMed native", "nbib"),
+            ("EndNote Web (.enw)", "enw"),
+        ]:
+            ctk.CTkRadioButton(dialog, text=label, variable=fmt_var, value=val).pack(anchor="w", padx=24, pady=2)
+
+        chosen = {"fmt": None}
+
+        def _ok():
+            chosen["fmt"] = fmt_var.get()
+            dialog.destroy()
+
+        ctk.CTkButton(dialog, text="Export", command=_ok, width=100).pack(pady=(12, 0))
+        dialog.wait_window()
+
+        fmt = chosen["fmt"]
+        if not fmt:
+            return
+
+        ext_map = {"ris": ".ris", "bib": ".bib", "nbib": ".nbib", "enw": ".enw"}
+        type_map = {"ris": "RIS files", "bib": "BibTeX files", "nbib": "NBIB files", "enw": "EndNote Web files"}
+        safe_title = "".join(c for c in (article.get("title") or "citation")[:40] if c.isalnum() or c in " _-").strip()
+        path = filedialog.asksaveasfilename(
+            defaultextension=ext_map[fmt],
+            filetypes=[(type_map[fmt], f"*{ext_map[fmt]}"), ("All files", "*.*")],
+            initialfile=f"{safe_title}{ext_map[fmt]}",
+        )
+        if not path:
+            return
+
+        formatters = {
+            "ris": self._format_ris,
+            "bib": self._format_bibtex,
+            "nbib": self._format_nbib,
+            "enw": self._format_enw,
+        }
+        try:
+            content = formatters[fmt]([article])
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+        except Exception as e:
+            print(f"Citation export error: {e}")
+
+    def _citation_year(self, article: dict) -> str:
+        """Return 4-digit publication year, falling back to processed_at year."""
+        for field in ("pub_date", "processed_at"):
+            val = article.get(field) or ""
+            if len(val) >= 4 and val[:4].isdigit():
+                return val[:4]
+        return ""
+
+    def _format_ris(self, articles: list) -> str:
+        lines = []
+        for a in articles:
+            year = self._citation_year(a)
+            lines.append("TY  - JOUR")
+            lines.append(f"TI  - {a.get('title', '')}")
+            for author in (a.get("authors") or "").split(", "):
+                author = author.strip()
+                if author:
+                    lines.append(f"AU  - {author}")
+            if a.get("journal"):
+                lines.append(f"JO  - {a['journal']}")
+            if year:
+                lines.append(f"PY  - {year}")
+            if a.get("doi"):
+                lines.append(f"DO  - {a['doi']}")
+            if a.get("url"):
+                lines.append(f"UR  - {a['url']}")
+            if a.get("pmid"):
+                lines.append(f"AN  - {a['pmid']}")
+            if a.get("abstract"):
+                lines.append(f"AB  - {a['abstract']}")
+            lines.append("ER  -")
+            lines.append("")
+        return "\n".join(lines)
+
+    def _format_bibtex(self, articles: list) -> str:
+        blocks = []
+        for a in articles:
+            year = self._citation_year(a)
+            pmid = a.get("pmid") or ""
+            doi = a.get("doi") or ""
+            key = (f"pmid{pmid}" if pmid
+                   else doi.replace("/", "_").replace(".", "_") if doi
+                   else f"article{a.get('id', '')}")
+            authors_raw = (a.get("authors") or "").split(", ")
+            author_str = " and ".join(au.strip() for au in authors_raw if au.strip())
+            parts = [f"@article{{{key},"]
+            parts.append(f"  title = {{{a.get('title', '')}}},")
+            if author_str:
+                parts.append(f"  author = {{{author_str}}},")
+            if a.get("journal"):
+                parts.append(f"  journal = {{{a['journal']}}},")
+            if year:
+                parts.append(f"  year = {{{year}}},")
+            if doi:
+                parts.append(f"  doi = {{{doi}}},")
+            if a.get("url"):
+                parts.append(f"  url = {{{a['url']}}},")
+            if pmid:
+                parts.append(f"  note = {{PMID: {pmid}}},")
+            if a.get("abstract"):
+                parts.append(f"  abstract = {{{a['abstract']}}},")
+            parts.append("}")
+            blocks.append("\n".join(parts))
+        return "\n\n".join(blocks) + "\n"
+
+    def _format_nbib(self, articles: list) -> str:
+        lines = []
+        for a in articles:
+            year = self._citation_year(a)
+            if a.get("pmid"):
+                lines.append(f"PMID- {a['pmid']}")
+            lines.append(f"TI  - {a.get('title', '')}")
+            for author in (a.get("authors") or "").split(", "):
+                author = author.strip()
+                if author:
+                    lines.append(f"AU  - {author}")
+            if a.get("journal"):
+                lines.append(f"JT  - {a['journal']}")
+            if year:
+                lines.append(f"DP  - {year}")
+            if a.get("doi"):
+                lines.append(f"LID - {a['doi']} [doi]")
+            if a.get("abstract"):
+                lines.append(f"AB  - {a['abstract']}")
+            lines.append("")
+        return "\n".join(lines)
+
+    def _format_enw(self, articles: list) -> str:
+        lines = []
+        for a in articles:
+            year = self._citation_year(a)
+            lines.append("%0 Journal Article")
+            lines.append(f"%T {a.get('title', '')}")
+            for author in (a.get("authors") or "").split(", "):
+                author = author.strip()
+                if author:
+                    lines.append(f"%A {author}")
+            if a.get("journal"):
+                lines.append(f"%J {a['journal']}")
+            if year:
+                lines.append(f"%D {year}")
+            if a.get("doi"):
+                lines.append(f"%R {a['doi']}")
+            if a.get("pmid"):
+                lines.append(f"%M {a['pmid']}")
+            if a.get("abstract"):
+                lines.append(f"%X {a['abstract']}")
+            if a.get("url"):
+                lines.append(f"%U {a['url']}")
+            lines.append("")
+        return "\n".join(lines)
+
     def _edit_article(self, article: dict):
         """Open a dialog to edit article tags, score, and summary."""
         dialog = ctk.CTkToplevel(self.master)
@@ -756,32 +1012,15 @@ class ResultsTab:
         summary_text.pack(fill="x", padx=15, pady=(0, 5))
         summary_text.insert("1.0", article.get("summary", ""))
 
-        # Tags field — horizontal scroll via Canvas + Scrollbar
+        # Tags field — horizontal scroll via CTkScrollableFrame (theme-aware)
         ctk.CTkLabel(content, text="Tags:", font=ctk.CTkFont(size=12)).pack(anchor="w", padx=15, pady=(5, 2))
         tag_list_init = [t.strip() for t in article.get("tags", "").split(",") if t.strip()]
 
-        # Frame to hold canvas and scrollbar
-        tag_frame = ctk.CTkFrame(content, fg_color="transparent")
-        tag_frame.pack(fill="x", padx=15, pady=(0, 2))
+        tag_sf = ctk.CTkScrollableFrame(content, orientation="horizontal", height=50)
+        tag_sf.pack(fill="x", padx=15, pady=(0, 2))
 
-        # Canvas for horizontal scrolling
-        tag_canvas = tkinter.Canvas(tag_frame, height=50, bg="#212121", highlightthickness=0)
-        tag_canvas.pack(fill="x", side="top")
-
-        # Horizontal scrollbar
-        tag_scrollbar = ttk.Scrollbar(tag_frame, orient="horizontal", command=tag_canvas.xview)
-        tag_scrollbar.pack(fill="x", side="bottom")
-        tag_canvas.configure(xscrollcommand=tag_scrollbar.set)
-
-        # Container inside canvas
-        tag_container = ctk.CTkFrame(tag_canvas, fg_color="transparent")
-        tag_canvas_window = tag_canvas.create_window(0, 0, window=tag_container, anchor="nw")
-        tag_pills = PillFrame(tag_container, items=tag_list_init, read_only=False)
-        tag_pills.pack(fill="both", expand=True, padx=2, pady=2)
-
-        def _on_tag_canvas_configure(event=None):
-            tag_canvas.configure(scrollregion=tag_canvas.bbox("all"))
-        tag_container.bind("<Configure>", _on_tag_canvas_configure)
+        tag_pills = PillFrame(tag_sf, items=tag_list_init, read_only=False)
+        tag_pills.pack(side="left", padx=2, pady=2)
 
         tag_add_frame = ctk.CTkFrame(content, fg_color="transparent")
         tag_add_frame.pack(fill="x", padx=15, pady=(0, 5))

@@ -85,6 +85,12 @@ class ArticleDatabase:
         except sqlite3.OperationalError:
             pass
 
+        # Add 'pub_date' column for citation export
+        try:
+            cursor.execute("ALTER TABLE processed_articles ADD COLUMN pub_date TEXT")
+        except sqlite3.OperationalError:
+            pass
+
         # Migrate old run_history: rename emails_checked -> searches
         try:
             cursor.execute("ALTER TABLE run_history RENAME COLUMN emails_checked TO searches")
@@ -173,8 +179,8 @@ class ArticleDatabase:
         cursor.execute("""
             INSERT OR REPLACE INTO processed_articles
             (doi, pmid, title, journal, authors, url, abstract,
-             relevance_score, relevance_reason, summary, tags, include, feedback, processed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             relevance_score, relevance_reason, summary, tags, include, feedback, pub_date, processed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             article_data.get("doi", ""),
             article_data.get("pmid", ""),
@@ -189,6 +195,7 @@ class ArticleDatabase:
             ",".join(article_data.get("tags", [])),
             article_data.get("include", 1),
             article_data.get("feedback", ""),
+            article_data.get("date", ""),
             datetime.now().isoformat(),
         ))
 
@@ -416,7 +423,7 @@ class ArticleDatabase:
 
         cursor.execute("""
             SELECT id, doi, pmid, title, journal, authors, url, abstract,
-                   relevance_score, relevance_reason, summary, tags, include, feedback, processed_at
+                   relevance_score, relevance_reason, summary, tags, include, feedback, pub_date, processed_at
             FROM processed_articles
             WHERE include = 1
             ORDER BY processed_at DESC
@@ -424,7 +431,7 @@ class ArticleDatabase:
         """, (limit,))
 
         columns = ["id", "doi", "pmid", "title", "journal", "authors", "url", "abstract",
-                   "relevance_score", "relevance_reason", "summary", "tags", "include", "feedback", "processed_at"]
+                   "relevance_score", "relevance_reason", "summary", "tags", "include", "feedback", "pub_date", "processed_at"]
         return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
     def get_skipped_articles(self, limit: int = 5000) -> List[Dict[str, Any]]:
@@ -434,7 +441,7 @@ class ArticleDatabase:
 
         cursor.execute("""
             SELECT id, doi, pmid, title, journal, authors, url, abstract,
-                   relevance_score, relevance_reason, summary, tags, include, feedback, processed_at
+                   relevance_score, relevance_reason, summary, tags, include, feedback, pub_date, processed_at
             FROM processed_articles
             WHERE include = 1 AND (feedback IS NULL OR feedback = '')
             ORDER BY processed_at DESC
@@ -442,7 +449,7 @@ class ArticleDatabase:
         """, (limit,))
 
         columns = ["id", "doi", "pmid", "title", "journal", "authors", "url", "abstract",
-                   "relevance_score", "relevance_reason", "summary", "tags", "include", "feedback", "processed_at"]
+                   "relevance_score", "relevance_reason", "summary", "tags", "include", "feedback", "pub_date", "processed_at"]
         return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
     def get_seen_ids(self) -> tuple[set[str], set[str]]:

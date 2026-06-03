@@ -50,7 +50,7 @@ cp LICENSE tmp_dmg/
 hdiutil create -volname "PaperMatcher" \
   -srcfolder tmp_dmg \
   -ov -format UDZO \
-  PaperMatcher_v1.0.0.dmg
+  PaperMatcher_v1.1.0.dmg
 
 rm -rf tmp_dmg
 ```
@@ -83,7 +83,7 @@ codesign --deep --force --verify --verbose \
 
 Then notarize with Apple:
 ```bash
-xcrun notarytool submit PaperMatcher_v1.0.0.dmg \
+xcrun notarytool submit PaperMatcher_v1.1.0.dmg \
   --apple-id your-email@example.com \
   --password "your-app-specific-password" \
   --team-id YOUR_TEAM_ID
@@ -120,5 +120,5 @@ Edit `PaperMatcher.spec` to customize:
 
 ---
 
-**Last updated:** 2026-05-27  
-**Version:** PaperMatcher v1.0.0
+**Last updated:** 2026-06-03  
+**Version:** PaperMatcher v1.1.0

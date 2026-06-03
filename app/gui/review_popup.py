@@ -293,7 +293,8 @@ class ReviewPopup:
             if conflict and conflict.upper() != "NONE DETECTED":
                 self.abstract_text.insert("end", f"Conflict/Bias: {conflict}\n")
 
-        self.abstract_text.tag_config("section_header", foreground="#4FC3F7")
+        _header_fg = "#4FC3F7" if ctk.get_appearance_mode() == "Dark" else "#1565C0"
+        self.abstract_text.tag_config("section_header", foreground=_header_fg)
         self._apply_highlights()
 
         # Focus accept button for fast review

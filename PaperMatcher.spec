@@ -5,6 +5,10 @@ Build with: pyinstaller PaperMatcher.spec
 Output: dist/PaperMatcher.app
 """
 
+import sys as _sys
+_sys.path.insert(0, ".")
+from app.version import __version__ as APP_VERSION
+
 block_cipher = None
 
 a = Analysis(
@@ -66,8 +70,28 @@ app = BUNDLE(
     info_plist={
         "NSPrincipalClass": "NSApplication",
         "NSHighResolutionCapable": "True",
-        "CFBundleVersion": "1.0.0",
-        "CFBundleShortVersionString": "1.0.0",
+        "CFBundleVersion": APP_VERSION,
+        "CFBundleShortVersionString": APP_VERSION,
         "NSHumanReadableCopyright": "Copyright © 2026. MIT License.",
     },
 )
+
+import platform, subprocess
+if platform.system() == "Darwin":
+    subprocess.run(
+        ["xattr", "-r", "-d", "com.apple.quarantine", "dist/PaperMatcher.app"],
+        check=False,
+    )
+    # Create versioned DMG
+    import os, shutil
+    tmp = "dist/_dmg_tmp"
+    dmg_path = f"dist/PaperMatcher_v{APP_VERSION}.dmg"
+    shutil.rmtree(tmp, ignore_errors=True)
+    os.makedirs(tmp)
+    shutil.copytree("dist/PaperMatcher.app", f"{tmp}/PaperMatcher.app")
+    subprocess.run(
+        ["hdiutil", "create", "-volname", f"PaperMatcher {APP_VERSION}",
+         "-srcfolder", tmp, "-ov", "-format", "UDZO", dmg_path],
+        check=True,
+    )
+    shutil.rmtree(tmp)

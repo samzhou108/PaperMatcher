@@ -150,7 +150,7 @@ class RunTab:
         """Build the run tab UI."""
         # Wrap all content in a scrollable frame so controls are accessible
         # even when the window is small.
-        sc = ScrollableFrame(self.master, fg_color="transparent")
+        sc = ScrollableFrame(self.master)
         sc.pack(fill="both", expand=True)
 
         controls = ctk.CTkFrame(sc, fg_color="transparent")
@@ -216,7 +216,7 @@ class RunTab:
         def _on_context_focus(_event):
             if self.context_textbox.get("1.0", "end").strip() == self._placeholder_text:
                 self.context_textbox.delete("1.0", "end")
-                self.context_textbox.configure(text_color="white")
+                self.context_textbox.configure(text_color=("black", "white"))
 
         def _on_context_blur(_event):
             if not self.context_textbox.get("1.0", "end").strip():

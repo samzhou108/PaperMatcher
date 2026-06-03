@@ -22,18 +22,26 @@ SCREENER_LOCAL_MODEL = "llama3.2:latest"
 SCREENER_CLOUD_DEFAULT = "llama3.2:latest"
 
 SCORER_LOCAL_MODEL = "llama3.2:latest"
-SCORER_CLOUD_DEFAULT = "deepseek/deepseek-v4-flash:free"
+SCORER_CLOUD_DEFAULT = "deepseek/deepseek-v4-flash"
 
-# Suggested cloud models for dropdown
+# Suggested cloud models for dropdown (OpenRouter model IDs unless noted)
+# Benchmarked June 2026 against 92-paper labeled set (P1=llama3.2 reference).
 CLOUD_MODELS = [
-    "deepseek/deepseek-v4-flash:free",
-    "gpt-4o-mini",
-    "gpt-4o",
-    "gpt-3.5-turbo",
-    "claude-3.5-sonnet",
-    "claude-3-opus",
-    "llama3.2",
-    "mistral-7b",
+    # --- Free (no prompt training required) ---
+    "z-ai/glm-4.5-air:free",
+    # --- Free (prompt training required — benchmarked) ---
+    "openrouter/owl-alpha",                        # 79.1% E2E — best free tested
+    # --- Free (prompt training required — available, less tested) ---
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "poolside/laguna-m.1:free",
+    "poolside/laguna-xs.2:free",
+    "nvidia/nemotron-3-nano-30b-a3b:free",
+    # --- Paid (benchmarked) ---
+    "deepseek/deepseek-v4-flash",                  # 83.7% E2E — recommended default
+    "inclusionai/ling-2.6-1t",                     # 81.4% E2E — recommended backup
+    "inclusionai/ling-2.6-flash",                  # 72.1% E2E — cheapest paid
+    # --- Paid (other) ---
+    "deepseek/deepseek-v4-pro",
 ]
 
 # Curated models for article relevance scoring + summarisation.
@@ -119,6 +127,9 @@ class SettingsTab:
             width=155, height=28,
             fg_color="transparent",
             border_width=1,
+            border_color=("gray50", "gray60"),
+            text_color=("gray20", "gray80"),
+            hover_color=("gray80", "gray30"),
             font=ctk.CTkFont(size=12),
             command=self._show_suggested_setup,
         ).pack(side="right", pady=(4, 0))
@@ -445,9 +456,9 @@ class SettingsTab:
                 width=55,
                 height=28,
                 font=ctk.CTkFont(size=12),
-                fg_color=("gray75", "gray30"),
-                hover_color=("gray65", "gray40"),
-                text_color=("black", "white"),
+                fg_color=("gray55", "gray35"),
+                hover_color=("gray45", "gray45"),
+                text_color=("white", "white"),
                 state="disabled",
                 command=lambda m=model["id"]: self._use_model(m),
             )
@@ -983,9 +994,7 @@ Benchmark (92 labeled papers, one research area):
    mistral:7b        100% recall  ~1.8s/paper  (slower, runs hot)
 
 Recommendation: keep llama3.2:latest as your screener.
-No other tested model improved on it. That said, you can
-switch to any Ollama model or use a cloud API for Pass 1
-if you prefer — use the selector above.
+No other tested model improved on it.
 
 ────────────────────────────────────────
 
@@ -999,16 +1008,18 @@ Test set: 92 papers labeled relevant / borderline / irrelevant
 for a single PhD research area (neuropathic pain, microglia).
 All configs used llama3.2:latest for Pass 1.
 
-   Config                                                                 Threshold  Recall  Noise   Time
-   ────────────────────────────────────────
-★  deepseek-v4-flash:free (cloud)                  t=4      86%     33%   ~4.4m
-★  llama3.2:latest (local)                                    t=6      98%     67%   ~5.4m
-   granite3.3:8b (local)                                    t=3      88%     33%   ~15m
-   gemma3:4b (local)                                      t=6      91%     67%   ~6.6m
+   Config                          Threshold  Recall  Noise    Time     Cost
+   ─────────────────────────────────────────────────────────────────────────
+★  deepseek/deepseek-v4-flash        t=4      83.7%   33%    ~6.6m   ~$0.007
+   inclusionai/ling-2.6-1t           t=4      81.4%   33%    ~4.4m   ~$0.008
+   openrouter/owl-alpha (free)        t=4      79.1%   33%    ~9.1m    $0.00
+★  llama3.2:latest (local)            t=6      97.7%   67%    ~5.4m    $0.00
+   granite3.3:8b (local)              t=3      88.0%   33%   ~15.0m    $0.00
+   gemma3:4b (local)                  t=6      91.0%   67%    ~6.6m    $0.00
 
-Recall = papers correctly identified as relevant.
-Noise = irrelevant papers that still pass the threshold
-        (you will see these in the review queue).
+Recall = end-to-end: papers correctly identified as relevant.
+Noise  = irrelevant papers passing the threshold (seen in review queue).
+Cost   = estimated per 92-paper run via OpenRouter.
 
 ────────────────────────────────────────
 
@@ -1017,10 +1028,10 @@ LOCAL OLLAMA SETUP (Pass 2)
 No API key, no rate limits, no data leaves your machine.
 Set API Base URL to http://localhost:11434, enter model name.
 
-   llama3.2:latest   3B  ~2 GB   — best local recall
-   granite3.3:8b     8B  ~5 GB   — best local precision
-   gemma3:4b         4B  ~3.3 GB — fast, good recall
-   mistral:7b        7B  ~4.4 GB — good precision, runs hot
+   llama3.2:latest   3B  ~2 GB   — best local recall (97.7%)
+   granite3.3:8b     8B  ~5 GB   — best local precision (88%)
+   gemma3:4b         4B  ~3.3 GB — good recall (91%), faster
+   mistral:7b        7B  ~4.4 GB — decent precision, runs hot
 
 Cloud-compatible local APIs (Groq, Together AI, LM Studio)
 also work with the same URL format.
@@ -1042,28 +1053,44 @@ CLOUD SETUP (OpenRouter)
    to 1,000 req/day. For 20–50 articles per run, $10 lasts
    a long time.
 
-★ Free models (as of May 2026)
-   deepseek/deepseek-v4-flash:free  — recommended, no prompt
-                                      training required
-   openrouter/owl-alpha:free        — requires prompt training
-   nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free
-                                    — requires prompt training
+⚠  Free model situation (as of June 2026)
+   Most free models require prompt training consent. Your
+   abstracts may be used to train future models.
 
-   Enable prompt training (for non-DeepSeek free models):
-   OpenRouter → Settings → Privacy → Allow prompt training
+   If privacy matters, use local Ollama instead — no data
+   ever leaves your machine.
 
-Paid models (no daily limit, no prompt training)
-   deepseek/deepseek-v4-flash   $0.126 / $0.252 per 1M tokens
-   deepseek/deepseek-v4-pro     $0.435 / $0.87  per 1M tokens
+   Free — no prompt training required:
+   z-ai/glm-4.5-air:free         — only private free option
+                                   (poor score calibration in testing)
 
-Why DeepSeek? Not brand loyalty — it's simply the best
-cost-to-performance fit for this task. Scoring 30–50 short
-abstracts requires fast, instruction-following responses,
-not deep reasoning or large context. DeepSeek V4 Flash is
-very cheap and handles this well. That said, you can use
-any provider: OpenAI, Anthropic, Gemini, Mistral, etc. —
-any OpenAI-compatible API URL works. Use whatever you're
-comfortable with or already have credits for.
+   Free — benchmarked (prompt training required):
+   openrouter/owl-alpha          — 79.1% E2E recall ← best free
+   Enable first: OpenRouter → Settings → Privacy → Allow prompt training
+
+   Free — available, not benchmarked (prompt training required):
+   nvidia/nemotron-3-super-120b-a12b:free
+   poolside/laguna-m.1:free
+   poolside/laguna-xs.2:free
+   nvidia/nemotron-3-nano-30b-a3b:free
+
+   Note: free model availability changes frequently.
+   Check openrouter.ai/models for current status.
+
+Recommended paid models (no daily limit, no prompt training)
+   deepseek/deepseek-v4-flash   $0.098 / $0.197 per 1M  83.7% E2E  ← best
+   inclusionai/ling-2.6-1t      $0.075 / $0.625 per 1M  81.4% E2E  ← backup
+   inclusionai/ling-2.6-flash   $0.010 / $0.030 per 1M  72.1% E2E  ← cheapest
+   deepseek/deepseek-v4-pro     $0.435 / $0.870 per 1M  (untested, higher quality)
+
+   $10 USD credit → ~1,000 req/day. For 20–50 articles per
+   run, $10 lasts a very long time.
+
+Why DeepSeek V4 Flash? Benchmarked against 92 labeled papers
+— best end-to-end recall of any cloud model tested (83.7%).
+Fast, cheap, and follows the scoring format reliably. That
+said, any OpenAI-compatible API works here: use whatever
+provider you're already paying for.
 
 ℹ  Model availability changes frequently.
    Check openrouter.ai/models for current options.""")
